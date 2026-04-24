@@ -1,0 +1,14 @@
+[
+  {
+    "username": "SOA_APP",
+    "status": "ACTIVE",
+    "program": "JDBC Thin Client",
+    "logon_time": "2026-04-22 12:20:10"
+  },
+  {
+    "username": "USER1",
+    "status": "INACTIVE",
+    "program": "sqlplus",
+    "logon_time": "2026-04-22 11:58:02"
+  }
+]

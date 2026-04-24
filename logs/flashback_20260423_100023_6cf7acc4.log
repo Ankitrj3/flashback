@@ -1,0 +1,20 @@
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4] ========================================================================
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4] Oracle Flashback Automation — Session Log
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4]   Run ID    : 6cf7acc4
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4]   Tool vers : 2.0.0
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4]   Operator  : alias
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4]   Hostname  : Asad
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4]   Platform  : Windows 11
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4]   Python    : 3.13.1
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4]   Log file  : flashback_20260423_100023_6cf7acc4.log
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4]   Started   : 2026-04-23 10:00:23
+2026-04-23 10:00:23 | INFO     | [run:6cf7acc4] ========================================================================
+2026-04-23 10:00:32 | INFO     | [run:6cf7acc4] [run] Command: C:\Program Files\Git\bin\bash.exe E:\Task\flashback\scripts\test_connectivity.sh
+2026-04-23 10:00:33 | INFO     | [run:6cf7acc4] [run] test_connectivity.sh finished: exit_code=127 aborted=False timed_out=False
+2026-04-23 10:00:33 | INFO     | [run:6cf7acc4] Workflow 'Test Connectivity' finished: FAILED
+2026-04-23 10:01:02 | INFO     | [run:6cf7acc4] [run] Command: C:\Program Files\Git\bin\bash.exe E:\Task\flashback\scripts\create_backup.sh
+2026-04-23 10:01:02 | INFO     | [run:6cf7acc4] [run] create_backup.sh finished: exit_code=3 aborted=False timed_out=False
+2026-04-23 10:01:02 | INFO     | [run:6cf7acc4] Workflow 'Create Flashback Request' finished: FAILED
+2026-04-23 10:01:47 | INFO     | [run:6cf7acc4] [run] Command: C:\Program Files\Git\bin\bash.exe E:\Task\flashback\scripts\create_backup.sh
+2026-04-23 10:01:47 | INFO     | [run:6cf7acc4] [run] create_backup.sh finished: exit_code=3 aborted=False timed_out=False
+2026-04-23 10:01:47 | INFO     | [run:6cf7acc4] Workflow 'Restore to 'FB_DEMO_20260421_2315'' finished: FAILED

@@ -1,0 +1,82 @@
+2026-04-23 11:17:24 | INFO     | [run:c0873e8e] ========================================================================
+2026-04-23 11:17:24 | INFO     | [run:c0873e8e] Oracle Flashback Automation - Session Log
+2026-04-23 11:17:24 | INFO     | [run:c0873e8e]   Run ID    : c0873e8e
+2026-04-23 11:17:24 | INFO     | [run:c0873e8e]   Tool vers : 2.0.0
+2026-04-23 11:17:24 | INFO     | [run:c0873e8e]   Operator  : alias
+2026-04-23 11:17:24 | INFO     | [run:c0873e8e]   Hostname  : Asad
+2026-04-23 11:17:25 | INFO     | [run:c0873e8e]   Platform  : Windows 11
+2026-04-23 11:17:25 | INFO     | [run:c0873e8e]   Python    : 3.13.1
+2026-04-23 11:17:25 | INFO     | [run:c0873e8e]   Log file  : flashback_20260423_111724_c0873e8e.log
+2026-04-23 11:17:25 | INFO     | [run:c0873e8e]   Started   : 2026-04-23 11:17:25
+2026-04-23 11:17:25 | INFO     | [run:c0873e8e] ========================================================================
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e] STEP 01 | Pre-flight Validation
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: verify configured shell (Git Bash / WSL / sh) is available.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: check all required script files exist and are non-empty.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         ABORTS workflow if any check fails.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e] STEP 02 | Confirmation Gates
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         Operator must confirm twice with YES dialogs before any script runs.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         A single Cancel or NO at either gate aborts the entire workflow.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e] STEP 03 | Filesystem Backup  [create_backup.sh]
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: create timestamped tar.gz archives of application filesystems:
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]                  fs_ne, fs1, fs2  →  $FLASHBACK_BACKUP_DIR/<name>_<timestamp>.tar.gz
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: log archive sizes after completion.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         Script exit code checked; non-zero aborts remaining steps.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e] STEP 04 | Create DB Restore Point  [create_flashback_restore_point.sh]
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: connect to Oracle CDB via sqlplus as SYSDBA.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: CREATE RESTORE POINT <name> GUARANTEE FLASHBACK DATABASE;
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: connect to PDB and create the same restore point.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: query V$RESTORE_POINT to confirm creation.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         Script exit code checked; non-zero marks workflow as FAILED.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e] STEP 05 | Audit Log Written
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: write timestamped run log to logs/flashback_<ts>_<run_id>.log
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: log: operator_id, run_id, hostname, Python version, workflow, status.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e] STEP 06 | Email Notification
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: send completion email to configured to_addrs.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         WOULD: attach log file to email.
+2026-04-23 11:17:32 | INFO     | [run:c0873e8e]         Email failure is logged but does NOT fail the workflow.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 01 | Pre-flight Validation
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: verify configured shell is available.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: check create_backup.sh, restore_backup.sh, flashback_to_restore_point.sh exist.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         ABORTS workflow if any check fails.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 02 | Active Session Check
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: query V$SESSION for non-background sessions.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         SOA_ACTION=WARN: logs session count and continues.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         SOA_ACTION=BLOCK: aborts if any active sessions found.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         [demo] Uses demo/active_sessions.json as session source.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 03 | Confirmation Gates
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         Operator must confirm the restore workflow with YES dialog.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         Operator selects restore point from list or types it manually.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         Operator must RE-TYPE the restore point name to confirm:
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]           Selected: 'FB_DEMO_20260421_2315'
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         A single mismatch or Cancel at any gate aborts the workflow.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 04 | Restore Point Selected: FB_DEMO_20260421_2315
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         Runtime variable RESTORE_POINT='FB_DEMO_20260421_2315' will be passed as $1 to:
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]           restore_backup.sh
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]           flashback_to_restore_point.sh
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 05 | Pre-Restore Filesystem Backup  [create_backup.sh]
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: create a safety tar.gz snapshot of fs_ne, fs1, fs2
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         before overwriting them in the restore step.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         Script exit code checked; non-zero aborts remaining steps.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 06 | Filesystem Restore  [restore_backup.sh]
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: extract most recent backup archives that match restore point 'FB_DEMO_20260421_2315'
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         back into their original filesystem locations.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         Script exit code checked; non-zero aborts remaining steps.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 07 | Database Flashback  [flashback_to_restore_point.sh]
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: ALTER PLUGGABLE DATABASE ALL CLOSE;
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: FLASHBACK DATABASE TO RESTORE POINT 'FB_DEMO_20260421_2315';
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: ALTER DATABASE OPEN RESETLOGS;
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: ALTER PLUGGABLE DATABASE ALL OPEN;
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         Script exit code checked; non-zero marks workflow as FAILED.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 08 | Audit Log Written
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: write timestamped run log to logs/flashback_<ts>_<run_id>.log
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: log: operator_id, run_id, hostname, workflow, restore_point, status.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e] STEP 09 | Email Notification
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: send completion email to configured to_addrs.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         WOULD: include restore_point name and final status in subject line.
+2026-04-23 11:18:01 | INFO     | [run:c0873e8e]         Email failure is logged but does NOT fail the workflow.
+2026-04-23 11:18:19 | INFO     | [run:c0873e8e] [run] Command: C:\Program Files\Git\bin\bash.exe E:\Task\flashback\scripts\create_backup.sh
+2026-04-23 11:18:22 | INFO     | [run:c0873e8e] [run] create_backup.sh finished: exit_code=0 aborted=False timed_out=False
+2026-04-23 11:18:22 | INFO     | [run:c0873e8e] [run] Command: C:\Program Files\Git\bin\bash.exe E:\Task\flashback\scripts\create_flashback_restore_point.sh
+2026-04-23 11:18:25 | INFO     | [run:c0873e8e] [run] create_flashback_restore_point.sh finished: exit_code=0 aborted=False timed_out=False
+2026-04-23 11:18:44 | WARNING  | [run:c0873e8e] [abort] Operator requested abort.
+2026-04-23 11:19:03 | WARNING  | [run:c0873e8e] [abort] Operator requested abort.

@@ -1,0 +1,58 @@
+# ============================================================
+# Oracle Flashback Automation — .gitignore
+# ============================================================
+
+# ----- Runtime / per-session files -----
+logs/*.log            # keep logs/ folder via logs/.gitkeep
+config.json           # client-specific — never commit; use config.example.json
+_cache_tmp/
+.cache/
+
+# ----- Python artefacts -----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.installed.cfg
+pip-selfcheck.json
+
+# ----- Virtual environments -----
+.venv/
+venv/
+env/
+.env                  # populated env file — never commit; use .env.example
+Pipfile.lock
+poetry.lock
+
+# ----- Testing -----
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# ----- Distribution / packaging -----
+flashback_*.zip       # output from package.ps1 / package.sh
+flashback_*.tar.gz    # local release archives (not the backup ones!)
+
+# ----- IDEs & editors -----
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ----- Windows -----
+desktop.ini
+$RECYCLE.BIN/

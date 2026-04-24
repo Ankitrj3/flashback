@@ -1,0 +1,11 @@
+# Oracle Flashback Automation — Python dependencies
+#
+# Runtime: NONE (uses Python standard library only)
+#   tkinter   — standard library (GUI)
+#   logging   — standard library
+#   pathlib   — standard library
+#   smtplib   — standard library (email)
+#   subprocess — standard library (shell runner)
+#
+# Development / testing only:
+pytest>=7.0

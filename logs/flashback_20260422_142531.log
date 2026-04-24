@@ -1,0 +1,22 @@
+2026-04-22 14:25:31,954 | INFO | Logging started: E:\Task\flashback_phase1\logs\flashback_20260422_142531.log
+2026-04-22 14:26:06,877 | INFO | STEP 01 | Menu Display
+2026-04-22 14:26:06,898 | INFO |         Workflow: Create Flashback Request
+2026-04-22 14:26:06,899 | INFO | STEP 02 | Confirmation Gate
+2026-04-22 14:26:06,902 | INFO |         Dual YES confirmations enforced (dry-run).
+2026-04-22 14:26:06,903 | INFO | STEP 03 | Pre-Validation
+2026-04-22 14:26:06,917 | INFO |         WOULD: test SSH connectivity to all nodes.
+2026-04-22 14:26:06,926 | INFO |         WOULD: test Oracle DB connectivity.
+2026-04-22 14:26:06,929 | INFO | STEP 04 | Show Restore Points
+2026-04-22 14:26:06,930 | INFO |         WOULD: query V$RESTORE_POINT and display NAME/TIME/GUARANTEED.
+2026-04-22 14:26:06,931 | INFO | STEP 05 | Session Check
+2026-04-22 14:26:06,932 | INFO |         WOULD: query V$SESSION for active sessions (SOA_ACTION driven).
+2026-04-22 14:26:06,932 | INFO | STEP 06 | Stop App Services
+2026-04-22 14:26:06,933 | INFO |         WOULD: SSH to each app node and execute stop commands + verify processes.
+2026-04-22 14:26:06,933 | INFO | STEP 07 | Filesystem Backup
+2026-04-22 14:26:06,934 | INFO |         WOULD: start nohup tar backups for fs_ne/fs1/fs2 with timestamped filenames.
+2026-04-22 14:26:06,935 | INFO | STEP 08 | DB Operation
+2026-04-22 14:26:06,936 | INFO |         WOULD: CREATE RESTORE POINT ... GUARANTEE FLASHBACK DATABASE (CDB then PDB).
+2026-04-22 14:26:06,938 | INFO | STEP 09 | Logging
+2026-04-22 14:26:06,940 | INFO |         WOULD: tee all command output into a persistent log file.
+2026-04-22 14:26:06,941 | INFO | STEP 10 | Email Notification
+2026-04-22 14:26:06,944 | INFO |         WOULD: send execution report email + attach log (if configured).
