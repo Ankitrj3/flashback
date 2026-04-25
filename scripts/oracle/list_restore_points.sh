@@ -19,9 +19,8 @@
 #                       STORAGE_SIZE, PDB_RESTORE_POINT, CON_ID
 #                FROM V$RESTORE_POINT ORDER BY TIME;
 #
-# OUTPUT FORMAT (tab-delimited for easy parsing):
-#   #NAME<TAB>TIME<TAB>GUA<TAB>STORAGE_SIZE<TAB>PDB<TAB>CON_ID
-#   RXEST01_CDB_flashback_restore_11FEB26<TAB>2026-02-11 14:00:00<TAB>YES<TAB>...
+# OUTPUT FORMAT (aligned for terminal):
+#   Outputs a cleanly aligned table directly to the console.
 #
 # DEMO MODE:
 #   Outputs the same table using demo/restore_points.json content (simulated).
@@ -46,15 +45,17 @@ INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-RXEST01}"
 if [ "${FLASHBACK_DEMO:-false}" = "true" ]; then
     log "DEMO MODE: Outputting simulated V\$RESTORE_POINT data."
 
-    # Header line — parsed by GUI to detect columns
-    echo "#NAME	TIME	GUA	STORAGE_SIZE	PDB	CON_ID"
+    # Header line
+    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "NAME" "TIME" "GUA" "STORAGE_SIZE" "PDB" "CON_ID"
+    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "---------------------------------------------" "-------------------------" "---" "---------------" "---" "------"
 
-    # Simulated rows matching client naming convention
-    echo "${INSTANCE_ID}_CDB_26MARCH2026_DATA	26-MAR-26 06.31.28 PM	YES	2.4484E+12	NO	0"
-    echo "${INSTANCE_ID}_PDB_26MARCH2026_DATA	26-MAR-26 06.31.28 PM	YES	2.6322E+11	YES	4"
-    echo "${INSTANCE_ID}_CDB_04082026	08-APR-26 05.42.18 PM	YES	0	NO	0"
-    echo "${INSTANCE_ID}_CDB_flashback_restore_11FEB26	11-FEB-26 14.00.00 PM	YES	2.4484E+12	NO	0"
-    echo "${INSTANCE_ID}_PDB_flashback_restore_11FEB26	11-FEB-26 14.00.00 PM	YES	2.6322E+11	YES	4"
+    # Simulated rows
+    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_CDB_26MARCH2026_DATA" "26-MAR-26 06.31.28 PM" "YES" "2.4484E+12" "NO" "0"
+    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_PDB_26MARCH2026_DATA" "26-MAR-26 06.31.28 PM" "YES" "2.6322E+11" "YES" "4"
+    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_CDB_04082026" "08-APR-26 05.42.18 PM" "YES" "0" "NO" "0"
+    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_CDB_flashback_restore_11FEB26" "11-FEB-26 14.00.00 PM" "YES" "2.4484E+12" "NO" "0"
+    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_PDB_flashback_restore_11FEB26" "11-FEB-26 14.00.00 PM" "YES" "2.6322E+11" "YES" "4"
+    echo ""
 
     log "DEMO: 5 restore points returned (simulated)."
     exit 0
@@ -88,24 +89,28 @@ fi
 
 log "Querying V\$RESTORE_POINT from Oracle ..."
 
-# Output header
-echo "#NAME	TIME	GUA	STORAGE_SIZE	PDB	CON_ID"
-
-# Query: output tab-delimited for easy parsing by Python
+# Query: neatly formatted terminal table
 sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
-SET PAGES 0
-SET HEAD OFF
+SET PAGES 100
+SET HEAD ON
 SET FEED OFF
-SET COLSEP '	'
-SET LINE 300
-SELECT TRIM(NAME),
-       TO_CHAR(TIME,'DD-MON-YY HH.MI.SS AM'),
-       TRIM(GUARANTEE_FLASHBACK_DATABASE),
-       NVL(TO_CHAR(STORAGE_SIZE),'0'),
-       TRIM(PDB_RESTORE_POINT),
-       TO_CHAR(CON_ID)
+SET LINE 200
+
+COL NAME FOR A45
+COL TIME FOR A25
+COL GUA  FOR A4
+COL STORAGE_SIZE FOR A15
+COL PDB  FOR A4
+COL CON_ID FOR 999999
+
+SELECT NAME,
+       TO_CHAR(TIME,'DD-MON-YY HH.MI.SS AM') AS TIME,
+       GUARANTEE_FLASHBACK_DATABASE AS GUA,
+       STORAGE_SIZE,
+       PDB_RESTORE_POINT AS PDB,
+       CON_ID
 FROM v\$restore_point
 ORDER BY TIME;
 EXIT;
