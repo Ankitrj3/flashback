@@ -52,32 +52,6 @@ APPS_PASS="${FLASHBACK_APPS_PASS:-apps}"
 WAIT_SECS=30     # seconds to wait after shutdown before re-check
 
 # =============================================================================
-# DEMO MODE
-# =============================================================================
-if [ "${FLASHBACK_DEMO:-false}" = "true" ]; then
-    log "DEMO MODE: Simulating EBS service shutdown on all app nodes."
-    log "DEMO: Instance   : $INSTANCE_ID"
-    log "DEMO: App nodes  : node2 node3 node4 node5 node6 node7 (simulated)"
-    log ""
-
-    for node in node2 node3 node4 node5 node6 node7; do
-        log "DEMO: ---- Processing node: $node ----"
-        log "DEMO: SSH check       : $node ... connected (simulated)"
-        sleep 0.3
-        log "DEMO: Service check   : Found FNDLIBR, Apache, opmn running (simulated)"
-        log "DEMO: Shutting down   : adstpall.sh apps/apps running on $node ... (simulated)"
-        sleep 1
-        log "DEMO: Services stopped on $node. Verifying ..."
-        sleep 0.3
-        log "DEMO: Re-check        : No EBS processes running on $node.  OK (simulated)"
-        log ""
-    done
-
-    log "DEMO: All app nodes confirmed clean. Safe to proceed with DB flashback. (simulated)"
-    exit 0
-fi
-
-# =============================================================================
 # REAL MODE
 # =============================================================================
 

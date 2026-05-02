@@ -38,34 +38,6 @@ INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-RXEST01}"
 DATE_TAG=$(date '+%d%b%y' | tr '[:lower:]' '[:upper:]')   # e.g. 23APR26
 
 # =============================================================================
-# DEMO MODE
-# =============================================================================
-if [ "${FLASHBACK_DEMO:-false}" = "true" ]; then
-    log "DEMO MODE: Simulating parallel nohup tar backup."
-    log "DEMO: Instance     : $INSTANCE_ID"
-    log "DEMO: Base dir     : /db8000/app/oracle/r122rxest01 (simulated)"
-    log "DEMO: Backup dir   : /iriscommon/backups/tars (simulated)"
-    log "DEMO: Filesystems  : fs_ne  fs1  fs2"
-    log "DEMO:"
-    log "DEMO: Launching all 3 tar jobs in parallel (nohup ... &) ..."
-    log "DEMO: nohup tar -cvf /iriscommon/backups/tars/${INSTANCE_ID}_fs_ne_backup_${DATE_TAG}.tar fs_ne &"
-    log "DEMO: nohup tar -cvf /iriscommon/backups/tars/${INSTANCE_ID}_fs1_Patch_backup_${DATE_TAG}.tar fs1 &"
-    log "DEMO: nohup tar -cvf /iriscommon/backups/tars/${INSTANCE_ID}_fs2_Run_backup_${DATE_TAG}.tar fs2 &"
-    sleep 1
-    log "DEMO: [pid 12301] fs_ne backup running... (simulated)"
-    log "DEMO: [pid 12302] fs1 backup running... (simulated)"
-    log "DEMO: [pid 12303] fs2 backup running... (simulated)"
-    sleep 2
-    log "DEMO: Waiting for all tar processes to complete..."
-    sleep 1
-    log "DEMO: [pid 12301] fs_ne done — ${INSTANCE_ID}_fs_ne_backup_${DATE_TAG}.tar  (142 GB) (simulated)"
-    log "DEMO: [pid 12302] fs1 done   — ${INSTANCE_ID}_fs1_Patch_backup_${DATE_TAG}.tar (89 GB) (simulated)"
-    log "DEMO: [pid 12303] fs2 done   — ${INSTANCE_ID}_fs2_Run_backup_${DATE_TAG}.tar (211 GB) (simulated)"
-    log "DEMO: All filesystem backups completed successfully. (simulated)"
-    exit 0
-fi
-
-# =============================================================================
 # REAL MODE
 # =============================================================================
 

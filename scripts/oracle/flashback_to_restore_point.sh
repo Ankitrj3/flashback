@@ -49,67 +49,6 @@ log() {
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-RXEST01}"
 
 # =============================================================================
-# DEMO MODE
-# =============================================================================
-if [ "${FLASHBACK_DEMO:-false}" = "true" ]; then
-    log "========================================================================"
-    log " ORACLE FLASHBACK DATABASE - RESTORE STARTING (DEMO)"
-    log "  Instance      : $INSTANCE_ID"
-    log "  Restore Point : $CDB_RESTORE_POINT"
-    log "  Operator time : $(date '+%Y-%m-%d %H:%M:%S')"
-    log "========================================================================"
-    log ""
-    log "Step 1/4: Verifying restore point '$CDB_RESTORE_POINT' in V\$RESTORE_POINT ..."
-    sleep 1
-    log ""
-    log "  NAME                                 TIME                            GUA  STORAGE_SIZE  PDB  CON_ID"
-    log "  -----------------------------------  ------------------------------  ---  ------------  ---  ------"
-    log "  $CDB_RESTORE_POINT  $(date '+%d-%b-%y %I.%M.%S000000000 %p')  YES  2.4484E+12    NO   0"
-    log ""
-    log "Pre-check passed: '$CDB_RESTORE_POINT' is a GUARANTEED restore point. (simulated)"
-    log ""
-    log "Step 2/4: Closing all PDBs ..."
-    sleep 1
-    log "  SQL> ALTER PLUGGABLE DATABASE ALL CLOSE IMMEDIATE; (simulated)"
-    log "  CON_ID  NAME     OPEN_MODE"
-    log "  ------  -------  ---------"
-    log "  4       $INSTANCE_ID  MOUNTED"
-    log "All PDBs closed. (simulated)"
-    log ""
-    log "Step 3/4: Executing FLASHBACK DATABASE TO RESTORE POINT '$CDB_RESTORE_POINT' ..."
-    sleep 2
-    log "  SQL> FLASHBACK DATABASE TO RESTORE POINT \"$CDB_RESTORE_POINT\"; (simulated)"
-    log "  Flashback complete. (simulated)"
-    log "  SQL> ALTER DATABASE OPEN RESETLOGS; (simulated)"
-    log "  STATUS  INSTANCE_NAME  DATABASE_STATUS"
-    log "  ------  -------------  ---------------"
-    log "  OPEN    ${INSTANCE_ID}1       ACTIVE"
-    log "Flashback complete. Database is OPEN with RESETLOGS. (simulated)"
-    log ""
-    log "Step 4/4: Opening all PDBs and verifying restore points ..."
-    sleep 1
-    log "  SQL> ALTER PLUGGABLE DATABASE ALL OPEN; (simulated)"
-    log "  CON_ID  NAME     OPEN_MODE"
-    log "  ------  -------  ----------"
-    log "  4       $INSTANCE_ID  READ WRITE"
-    log ""
-    log "  NAME                                 TIME                            GUA  STORAGE_SIZE  PDB  CON_ID"
-    log "  -----------------------------------  ------------------------------  ---  ------------  ---  ------"
-    log "  $CDB_RESTORE_POINT  $(date '+%d-%b-%y %I.%M.%S000000000 %p')  YES  2.4484E+12    NO   0"
-    log ""
-    log "All PDBs opened successfully. (simulated)"
-    log ""
-    log "========================================================================"
-    log " ORACLE FLASHBACK DATABASE - RESTORE COMPLETE (DEMO)"
-    log "  Instance      : $INSTANCE_ID"
-    log "  Restore Point : $CDB_RESTORE_POINT"
-    log "  Completed at  : $(date '+%Y-%m-%d %H:%M:%S')"
-    log "  Database is   : OPEN (READ WRITE) (simulated)"
-    log "========================================================================"
-    exit 0
-fi
-
-# =============================================================================
 # REAL MODE
 # =============================================================================
 

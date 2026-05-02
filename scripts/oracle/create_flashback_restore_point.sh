@@ -49,52 +49,6 @@ CDB_RP_NAME="${INSTANCE_ID}_CDB_flashback_restore_${DATE_TAG}"
 PDB_RP_NAME="${INSTANCE_ID}_PDB_flashback_restore_${DATE_TAG}"
 
 # =============================================================================
-# DEMO MODE
-# =============================================================================
-if [ "${FLASHBACK_DEMO:-false}" = "true" ]; then
-    log "DEMO MODE: Simulating guaranteed flashback restore point creation."
-    log "DEMO: Instance ID    : $INSTANCE_ID"
-    log "DEMO: PDB Name       : $PDB_NAME"
-    log "DEMO: CDB RP name    : $CDB_RP_NAME"
-    log "DEMO: PDB RP name    : $PDB_RP_NAME"
-    log "DEMO:"
-    log "DEMO: Sourcing Oracle env: . ./rxecst01.sh (simulated)"
-    log "DEMO: Connecting: sqlplus / as sysdba (simulated)"
-    sleep 1
-    log "DEMO: Pre-check: Database LOG_MODE: ARCHIVELOG  OK (simulated)"
-    log "DEMO: Pre-check: Flashback Database: YES  OK (simulated)"
-    log "DEMO:"
-    log "DEMO: -- CDB restore point --"
-    log "DEMO: SQL> CREATE RESTORE POINT \"$CDB_RP_NAME\" GUARANTEE FLASHBACK DATABASE;"
-    sleep 1
-    log "DEMO: Restore point created."
-    log "DEMO:"
-    log "DEMO: -- Switch to PDB --"
-    log "DEMO: SQL> ALTER SESSION SET CONTAINER=$PDB_NAME;"
-    log "DEMO: Session altered."
-    sleep 1
-    log "DEMO: -- PDB restore point --"
-    log "DEMO: SQL> CREATE RESTORE POINT \"$PDB_RP_NAME\" GUARANTEE FLASHBACK DATABASE;"
-    log "DEMO: Restore point created."
-    log "DEMO:"
-    log "DEMO: -- Back to CDB root, verify all restore points --"
-    log "DEMO: SQL> ALTER SESSION SET CONTAINER=CDB\$ROOT;"
-    log "DEMO: SQL> SELECT NAME, TIME, GUARANTEE_FLASHBACK_DATABASE GUA,"
-    log "DEMO:            STORAGE_SIZE, PDB_RESTORE_POINT PDB, CON_ID"
-    log "DEMO:      FROM V\$RESTORE_POINT ORDER BY TIME;"
-    log "DEMO:"
-    log "DEMO:  NAME                                 TIME                            GUA  STORAGE_SIZE  PDB  CON_ID"
-    log "DEMO:  -----------------------------------  ------------------------------  ---  ------------  ---  ------"
-    log "DEMO:  $CDB_RP_NAME  $(date '+%d-%b-%y %I.%M.%S000000000 %p')  YES  2.4484E+12    NO   0"
-    log "DEMO:  $PDB_RP_NAME  $(date '+%d-%b-%y %I.%M.%S000000000 %p')  YES  2.6322E+11    YES  4"
-    log "DEMO:"
-    log "DEMO: SUCCESS: Both restore points created. (simulated)"
-    log "CDB_RESTORE_POINT=$CDB_RP_NAME"
-    log "PDB_RESTORE_POINT=$PDB_RP_NAME"
-    exit 0
-fi
-
-# =============================================================================
 # REAL MODE
 # =============================================================================
 

@@ -18,23 +18,6 @@ load_or_prompt_credentials() {
         echo ""
         echo "Testing SSH connectivity to $FLASHBACK_APP_USER@$FLASHBACK_APP_HOST..."
         
-        if [ "$FLASHBACK_DEMO" = "true" ]; then
-            echo "SSH connection successful (simulated)."
-            echo ""
-            echo "Fetching environment files from $FLASHBACK_APP_HOST..."
-            echo "--------------------------------------------------------"
-            echo "lrwxrwxrwx. 1 $FLASHBACK_APP_USER dba 42 Aug 12 2024 EBSapps.env -> /db6000/app/oracle/r122rxedv05/EBSapps.env"
-            echo "--------------------------------------------------------"
-            echo ""
-            read -p "Enter the environment file to source (e.g. EBSapps.env): " FLASHBACK_APP_ENV_FILE
-            
-            if [ -n "$FLASHBACK_APP_ENV_FILE" ]; then
-                FLASHBACK_APP_BASE_DIR="/db6000/app/oracle/r122rxedv05"
-                FLASHBACK_INSTANCE_ID="RXEDV05"
-                echo "Auto-detected Application Base Directory: $FLASHBACK_APP_BASE_DIR"
-                echo "Auto-detected Database Instance Name: $FLASHBACK_INSTANCE_ID"
-            fi
-        else
             if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$FLASHBACK_APP_USER@$FLASHBACK_APP_HOST" "echo 'SSH connection successful.'"; then
                 echo "Warning: SSH connectivity failed. Please ensure key-based authentication is set up."
                 echo ""
@@ -72,14 +55,14 @@ load_or_prompt_credentials() {
                     read -p "Enter Database Instance Name (e.g. RXEDV05): " FLASHBACK_INSTANCE_ID
                 fi
             fi
-        fi
-        
         # Save to environment file
         echo "export FLASHBACK_INSTANCE_ID=\"$FLASHBACK_INSTANCE_ID\"" > "$ENV_FILE"
         echo "export FLASHBACK_APP_HOST=\"$FLASHBACK_APP_HOST\"" >> "$ENV_FILE"
         echo "export FLASHBACK_APP_USER=\"$FLASHBACK_APP_USER\"" >> "$ENV_FILE"
         echo "export FLASHBACK_APP_ENV_FILE=\"$FLASHBACK_APP_ENV_FILE\"" >> "$ENV_FILE"
         echo "export FLASHBACK_APP_BASE_DIR=\"$FLASHBACK_APP_BASE_DIR\"" >> "$ENV_FILE"
+        echo "export FLASHBACK_APP_NODES=\"$FLASHBACK_APP_HOST\"" >> "$ENV_FILE"
+        echo "export FLASHBACK_SSH_USER=\"$FLASHBACK_APP_USER\"" >> "$ENV_FILE"
         chmod 600 "$ENV_FILE"
         
         echo ""
@@ -100,6 +83,8 @@ load_or_prompt_credentials() {
     export FLASHBACK_APP_USER
     export FLASHBACK_APP_ENV_FILE
     export FLASHBACK_APP_BASE_DIR
+    export FLASHBACK_APP_NODES="$FLASHBACK_APP_HOST"
+    export FLASHBACK_SSH_USER="$FLASHBACK_APP_USER"
 }
 
 # Function to delete credentials
