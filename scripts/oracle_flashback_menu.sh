@@ -24,6 +24,23 @@ load_or_prompt_credentials() {
         elif [ -n "$ORACLE_SID" ]; then
             FLASHBACK_INSTANCE_ID="$ORACLE_SID"
         else
+            # Try to get from running Oracle pmon processes (if on DB server)
+            pmon_inst=$(ps -ef | grep "[o]ra_pmon_" | awk '{print $NF}' | sed 's/ora_pmon_//' | head -1)
+            if [ -n "$pmon_inst" ]; then
+                FLASHBACK_INSTANCE_ID="$pmon_inst"
+            else
+                # Try to get from sqlplus
+                if command -v sqlplus >/dev/null 2>&1; then
+                    sql_inst=$(sh "$(dirname "$0")/oracle/get_instance_name.sh" instance 2>/dev/null)
+                    if [ -n "$sql_inst" ]; then
+                        FLASHBACK_INSTANCE_ID="$sql_inst"
+                    fi
+                fi
+            fi
+        fi
+        
+        # Fallback if auto-detect fails
+        if [ -z "$FLASHBACK_INSTANCE_ID" ]; then
             read -p "Enter Database Instance Name (e.g. RXEST01): " FLASHBACK_INSTANCE_ID
         fi
         
@@ -36,6 +53,22 @@ load_or_prompt_credentials() {
         elif [ -n "$APPL_TOP" ]; then
             FLASHBACK_APP_BASE_DIR=$(dirname $(dirname $(dirname "$APPL_TOP")))
         else
+            # Try to infer from running EBS processes (e.g. FNDLIBR)
+            fnd_path=$(ps -ef | grep "[F]NDLIBR" | awk '{print $8}' | head -1)
+            if [ -n "$fnd_path" ]; then
+                # e.g., /db8000/app/oracle/r122rxest01/fs2/EBSapps/appl/fnd/12.0.0/bin/FNDLIBR
+                FLASHBACK_APP_BASE_DIR=$(echo "$fnd_path" | sed -E 's|/fs[12]/.*||')
+            else
+                # Try to infer from active concurrent managers or OPMN
+                opmn_path=$(ps -ef | grep "[o]pmn" | awk '{print $8}' | grep "EBSapps" | head -1)
+                if [ -n "$opmn_path" ]; then
+                    FLASHBACK_APP_BASE_DIR=$(echo "$opmn_path" | sed -E 's|/fs[12]/.*||')
+                fi
+            fi
+        fi
+        
+        # Fallback if auto-detect fails
+        if [ -z "$FLASHBACK_APP_BASE_DIR" ]; then
             read -p "Enter Application Base Directory (e.g. /db8000/app/oracle/r122rxest01): " FLASHBACK_APP_BASE_DIR
         fi
         
@@ -100,31 +133,14 @@ make_backup() {
     echo "         MAKE FLASHBACK REQUEST           "
     echo "=========================================="
     
-    echo "Checking active connections for user '$FLASHBACK_OS_USER'..."
-    conn_count=$(ps -ef | grep "$FLASHBACK_OS_USER" | grep -v sh | grep -v sshd | grep -v "ps -ef" | grep -v grep | wc -l | tr -d ' ')
-    echo "Found $conn_count active connections."
-    
-    if [ "$conn_count" -gt 0 ]; then
-        echo ""
-        read -p "Do you want to stop the application? (yes/no): " stop_app
-        if [[ "$stop_app" == "yes" ]]; then
-            echo "Stopping application using adstpall.sh..."
-            adstpall.sh <<EOF
-$FLASHBACK_APPS_USER
-$FLASHBACK_APPS_PASS
-$FLASHBACK_WLS_PASS
-EOF
-            if [ $? -ne 0 ]; then
-                echo "Warning: adstpall.sh returned a non-zero exit status."
-            fi
-        fi
+    capture_out=$(sh "$(dirname "$0")/oracle/capture_app_info.sh" --export)
+    ret=$?
+    if [ $ret -ne 0 ]; then
+        pause
+        return
     fi
+    eval "$capture_out"
     
-    echo ""
-    echo "Application File Systems to be backed up:"
-    echo "  RUN File System           : $FLASHBACK_APP_BASE_DIR/fs2/EBSapps/appl"
-    echo "  PATCH File System         : $FLASHBACK_APP_BASE_DIR/fs1/EBSapps/appl"
-    echo "  Non-Editioned File System : $FLASHBACK_APP_BASE_DIR/fs_ne"
     echo ""
     echo "Running backup command..."
     if ! sh "$(dirname "$0")/oracle/create_backup.sh"; then
@@ -163,27 +179,41 @@ restore_flashback() {
     
     echo ""
     echo "Fetching available restore points..."
-    echo "========================================================================================="
-    sh "$(dirname "$0")/oracle/list_restore_points.sh"
-    echo "========================================================================================="
+    
+    capture_out=$(sh "$(dirname "$0")/oracle/capture_db_info.sh" --export)
+    ret=$?
+    if [ $ret -ne 0 ]; then
+        pause
+        return
+    fi
+    eval "$capture_out"
+    
+    rp_name="$SELECTED_RESTORE_POINT"
+    if [ -z "$rp_name" ]; then
+        echo "Restore point selection failed."
+        pause
+        return
+    fi
     
     echo ""
     # Second confirmation
     echo "CRITICAL WARNING: This action cannot be undone."
-    read -p "Please type 'RESTORE' to confirm again: " confirm2
+    read -p "Please type 'RESTORE' to confirm restoring to '$rp_name': " confirm2
     if [[ "$confirm2" != "RESTORE" ]]; then
         echo "Restore cancelled. Confirmation did not match."
         pause
         return
     fi
-    
+
     echo ""
-    read -p "Enter restore point name: " rp_name
-    if [ -z "$rp_name" ]; then
-        echo "Restore point name cannot be empty. Cancelled."
+    echo "Capturing application information and stopping services before restore..."
+    app_capture_out=$(sh "$(dirname "$0")/oracle/capture_app_info.sh" --export)
+    app_ret=$?
+    if [ $app_ret -ne 0 ]; then
         pause
         return
     fi
+    eval "$app_capture_out"
 
     echo "Running restore backup command..."
     if ! sh "$(dirname "$0")/oracle/restore_backup.sh" "$rp_name"; then
