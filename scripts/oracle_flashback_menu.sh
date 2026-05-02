@@ -9,88 +9,105 @@ load_or_prompt_credentials() {
     else
         clear
         echo "=========================================="
-        echo "       INITIAL SETUP: AUTO-DETECT         "
+        echo "       INITIAL SETUP: CONFIGURATION       "
         echo "=========================================="
         
-        # Auto-detect OS User
-        FLASHBACK_OS_USER=$(whoami)
+        read -p "Enter Application Hostname (e.g. orxpcadv05ebs): " FLASHBACK_APP_HOST
+        read -p "Enter Application OS User (e.g. aporxdev): " FLASHBACK_APP_USER
         
-        # Auto-detect Instance ID
-        FLASHBACK_INSTANCE_ID=""
-        if [ -n "$CONTEXT_NAME" ]; then
-            FLASHBACK_INSTANCE_ID=$(echo "$CONTEXT_NAME" | cut -d'_' -f1)
-        elif [ -n "$TWO_TASK" ]; then
-            FLASHBACK_INSTANCE_ID="$TWO_TASK"
-        elif [ -n "$ORACLE_SID" ]; then
-            FLASHBACK_INSTANCE_ID="$ORACLE_SID"
+        echo ""
+        echo "Testing SSH connectivity to $FLASHBACK_APP_USER@$FLASHBACK_APP_HOST..."
+        
+        if [ "$FLASHBACK_DEMO" = "true" ]; then
+            echo "SSH connection successful (simulated)."
+            echo ""
+            echo "Fetching environment files from $FLASHBACK_APP_HOST..."
+            echo "--------------------------------------------------------"
+            echo "lrwxrwxrwx. 1 $FLASHBACK_APP_USER dba 42 Aug 12 2024 EBSapps.env -> /db6000/app/oracle/r122rxedv05/EBSapps.env"
+            echo "--------------------------------------------------------"
+            echo ""
+            read -p "Enter the environment file to source (e.g. EBSapps.env): " FLASHBACK_APP_ENV_FILE
+            
+            if [ -n "$FLASHBACK_APP_ENV_FILE" ]; then
+                FLASHBACK_APP_BASE_DIR="/db6000/app/oracle/r122rxedv05"
+                FLASHBACK_INSTANCE_ID="RXEDV05"
+                echo "Auto-detected Application Base Directory: $FLASHBACK_APP_BASE_DIR"
+                echo "Auto-detected Database Instance Name: $FLASHBACK_INSTANCE_ID"
+            fi
         else
-            # Try to get from running Oracle pmon processes (if on DB server)
-            pmon_inst=$(ps -ef | grep "[o]ra_pmon_" | awk '{print $NF}' | sed 's/ora_pmon_//' | head -1)
-            if [ -n "$pmon_inst" ]; then
-                FLASHBACK_INSTANCE_ID="$pmon_inst"
+            if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$FLASHBACK_APP_USER@$FLASHBACK_APP_HOST" "echo 'SSH connection successful.'"; then
+                echo "Warning: SSH connectivity failed. Please ensure key-based authentication is set up."
+                echo ""
+                # Fallback if SSH fails
+                read -p "Enter Database Instance Name (e.g. RXEST01): " FLASHBACK_INSTANCE_ID
+                read -p "Enter Application Base Directory (e.g. /db6000/app/oracle/r122rxedv05): " FLASHBACK_APP_BASE_DIR
             else
-                # Try to get from sqlplus
-                if command -v sqlplus >/dev/null 2>&1; then
-                    sql_inst=$(sh "$(dirname "$0")/oracle/get_instance_name.sh" instance 2>/dev/null)
-                    if [ -n "$sql_inst" ]; then
-                        FLASHBACK_INSTANCE_ID="$sql_inst"
+                echo ""
+                echo "Fetching environment files from $FLASHBACK_APP_HOST..."
+                echo "--------------------------------------------------------"
+                ssh "$FLASHBACK_APP_USER@$FLASHBACK_APP_HOST" "cd ~ && ls -lrt *.env 2>/dev/null"
+                echo "--------------------------------------------------------"
+                echo ""
+                read -p "Enter the environment file to source (e.g. EBSapps.env): " FLASHBACK_APP_ENV_FILE
+                
+                # Auto-detect base dir and instance ID from the env file
+                if [ -n "$FLASHBACK_APP_ENV_FILE" ]; then
+                    base_dir=$(ssh "$FLASHBACK_APP_USER@$FLASHBACK_APP_HOST" "readlink -f ~/$FLASHBACK_APP_ENV_FILE | xargs dirname")
+                    if [ -n "$base_dir" ]; then
+                        echo "Auto-detected Application Base Directory: $base_dir"
+                        FLASHBACK_APP_BASE_DIR="$base_dir"
+                    fi
+                    
+                    instance_id=$(ssh "$FLASHBACK_APP_USER@$FLASHBACK_APP_HOST" "source ~/$FLASHBACK_APP_ENV_FILE >/dev/null 2>&1 && echo \$TWO_TASK")
+                    if [ -n "$instance_id" ]; then
+                        echo "Auto-detected Database Instance Name: $instance_id"
+                        FLASHBACK_INSTANCE_ID="$instance_id"
                     fi
                 fi
-            fi
-        fi
-        
-        # Fallback if auto-detect fails
-        if [ -z "$FLASHBACK_INSTANCE_ID" ]; then
-            read -p "Enter Database Instance Name (e.g. RXEST01): " FLASHBACK_INSTANCE_ID
-        fi
-        
-        # Auto-detect App Base Directory
-        FLASHBACK_APP_BASE_DIR=""
-        if [ -n "$FILE_EDITION" ]; then
-            FLASHBACK_APP_BASE_DIR=$(dirname "$FILE_EDITION")
-        elif [ -n "$RUN_BASE" ]; then
-            FLASHBACK_APP_BASE_DIR=$(dirname "$RUN_BASE")
-        elif [ -n "$APPL_TOP" ]; then
-            FLASHBACK_APP_BASE_DIR=$(dirname $(dirname $(dirname "$APPL_TOP")))
-        else
-            # Try to infer from running EBS processes (e.g. FNDLIBR)
-            fnd_path=$(ps -ef | grep "[F]NDLIBR" | awk '{print $8}' | head -1)
-            if [ -n "$fnd_path" ]; then
-                # e.g., /db8000/app/oracle/r122rxest01/fs2/EBSapps/appl/fnd/12.0.0/bin/FNDLIBR
-                FLASHBACK_APP_BASE_DIR=$(echo "$fnd_path" | sed -E 's|/fs[12]/.*||')
-            else
-                # Try to infer from active concurrent managers or OPMN
-                opmn_path=$(ps -ef | grep "[o]pmn" | awk '{print $8}' | grep "EBSapps" | head -1)
-                if [ -n "$opmn_path" ]; then
-                    FLASHBACK_APP_BASE_DIR=$(echo "$opmn_path" | sed -E 's|/fs[12]/.*||')
+                
+                if [ -z "$FLASHBACK_APP_BASE_DIR" ]; then
+                    read -p "Enter Application Base Directory (e.g. /db6000/app/oracle/r122rxedv05): " FLASHBACK_APP_BASE_DIR
+                fi
+                if [ -z "$FLASHBACK_INSTANCE_ID" ]; then
+                    read -p "Enter Database Instance Name (e.g. RXEDV05): " FLASHBACK_INSTANCE_ID
                 fi
             fi
         fi
-        
-        # Fallback if auto-detect fails
-        if [ -z "$FLASHBACK_APP_BASE_DIR" ]; then
-            read -p "Enter Application Base Directory (e.g. /db8000/app/oracle/r122rxest01): " FLASHBACK_APP_BASE_DIR
-        fi
-        
-        echo "Detected OS User      : $FLASHBACK_OS_USER"
-        echo "Detected Instance ID  : $FLASHBACK_INSTANCE_ID"
-        echo "Detected Base Dir     : $FLASHBACK_APP_BASE_DIR"
-        echo "=========================================="
         
         # Save to environment file
         echo "export FLASHBACK_INSTANCE_ID=\"$FLASHBACK_INSTANCE_ID\"" > "$ENV_FILE"
+        echo "export FLASHBACK_APP_HOST=\"$FLASHBACK_APP_HOST\"" >> "$ENV_FILE"
+        echo "export FLASHBACK_APP_USER=\"$FLASHBACK_APP_USER\"" >> "$ENV_FILE"
+        echo "export FLASHBACK_APP_ENV_FILE=\"$FLASHBACK_APP_ENV_FILE\"" >> "$ENV_FILE"
         echo "export FLASHBACK_APP_BASE_DIR=\"$FLASHBACK_APP_BASE_DIR\"" >> "$ENV_FILE"
-        echo "export FLASHBACK_OS_USER=\"$FLASHBACK_OS_USER\"" >> "$ENV_FILE"
         chmod 600 "$ENV_FILE"
         
+        echo ""
         echo "Settings saved to $ENV_FILE"
         echo ""
         read -p "Press [Enter] key to continue..." fackEnterKey
     fi
     # Export for other scripts
     export FLASHBACK_INSTANCE_ID
+    export FLASHBACK_APP_HOST
+    export FLASHBACK_APP_USER
+    export FLASHBACK_APP_ENV_FILE
     export FLASHBACK_APP_BASE_DIR
-    export FLASHBACK_OS_USER
+}
+
+# Function to delete credentials
+delete_credentials() {
+    clear
+    echo "=========================================="
+    echo "          DELETE CREDENTIALS              "
+    echo "=========================================="
+    if [ -f "$ENV_FILE" ]; then
+        rm -f "$ENV_FILE"
+        echo "Credentials deleted successfully. They will be requested on next run."
+    else
+        echo "No credentials file found."
+    fi
+    pause
 }
 
 # Function to pause and wait for user input before returning to the menu
@@ -232,8 +249,9 @@ do
     echo "2. Restore flashback"
     echo "3. View Flashback"
     echo "4. Exit"
+    echo "5. Delete stored credentials"
     echo "=========================================="
-    read -p "Enter your choice [1-4]: " choice
+    read -p "Enter your choice [1-5]: " choice
 
     case $choice in
         1) make_backup ;;
@@ -243,8 +261,9 @@ do
             echo "Exiting..."
             exit 0 
             ;;
+        5) delete_credentials ;;
         *) 
-            echo "Invalid option. Please choose between 1 and 4."
+            echo "Invalid option. Please choose between 1 and 5."
             pause
             ;;
     esac
