@@ -73,9 +73,9 @@ if [ "${FLASHBACK_DEMO:-false}" = "true" ]; then
             log ""
             log "You are running adstpall.sh version 120.22.12020000.7"
             log ""
-            log "Enter the APPS username: $APPS_USER"
-            log "Enter the APPS password: ****"
-            log "Enter the WebLogic Server password: ****"
+            log "Enter the APPS username: apps"
+            log "Enter the APPS password: "
+            log "Enter the WebLogic Server password: "
             sleep 2
             log "Services stopped successfully. (simulated)"
             APP_SERVICES_STOPPED="true"
@@ -157,12 +157,8 @@ if [ -z "$APP_NODES" ]; then
             if [ -n "$ADSTPALL_PATH" ]; then
                 log "Found adstpall.sh at $ADSTPALL_PATH"
                 
-                # Execute adstpall.sh, passing passwords via heredoc
-                sh "$ADSTPALL_PATH" <<EOF >&2
-$APPS_USER
-$APPS_PASS
-$WLS_PASS
-EOF
+                # Execute adstpall.sh interactively so user can enter passwords if needed
+                sh "$ADSTPALL_PATH" >&2
                 if [ $? -eq 0 ]; then
                     log "Application services stopped."
                 else

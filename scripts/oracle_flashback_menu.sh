@@ -77,22 +77,13 @@ load_or_prompt_credentials() {
         echo "Detected Base Dir     : $FLASHBACK_APP_BASE_DIR"
         echo "=========================================="
         
-        read -p "Enter APPS Username: " FLASHBACK_APPS_USER
-        read -s -p "Enter APPS Password: " FLASHBACK_APPS_PASS
-        echo ""
-        read -s -p "Enter WebLogic Server Password: " FLASHBACK_WLS_PASS
-        echo ""
-        
         # Save to environment file
         echo "export FLASHBACK_INSTANCE_ID=\"$FLASHBACK_INSTANCE_ID\"" > "$ENV_FILE"
         echo "export FLASHBACK_APP_BASE_DIR=\"$FLASHBACK_APP_BASE_DIR\"" >> "$ENV_FILE"
         echo "export FLASHBACK_OS_USER=\"$FLASHBACK_OS_USER\"" >> "$ENV_FILE"
-        echo "export FLASHBACK_APPS_USER=\"$FLASHBACK_APPS_USER\"" >> "$ENV_FILE"
-        echo "export FLASHBACK_APPS_PASS=\"$FLASHBACK_APPS_PASS\"" >> "$ENV_FILE"
-        echo "export FLASHBACK_WLS_PASS=\"$FLASHBACK_WLS_PASS\"" >> "$ENV_FILE"
         chmod 600 "$ENV_FILE"
         
-        echo "Credentials saved to $ENV_FILE"
+        echo "Settings saved to $ENV_FILE"
         echo ""
         read -p "Press [Enter] key to continue..." fackEnterKey
     fi
@@ -100,24 +91,6 @@ load_or_prompt_credentials() {
     export FLASHBACK_INSTANCE_ID
     export FLASHBACK_APP_BASE_DIR
     export FLASHBACK_OS_USER
-    export FLASHBACK_APPS_USER
-    export FLASHBACK_APPS_PASS
-    export FLASHBACK_WLS_PASS
-}
-
-# Function to delete credentials
-delete_credentials() {
-    clear
-    echo "=========================================="
-    echo "          DELETE CREDENTIALS              "
-    echo "=========================================="
-    if [ -f "$ENV_FILE" ]; then
-        rm -f "$ENV_FILE"
-        echo "Credentials deleted successfully. They will be requested on next run."
-    else
-        echo "No credentials file found."
-    fi
-    pause
 }
 
 # Function to pause and wait for user input before returning to the menu
@@ -259,9 +232,8 @@ do
     echo "2. Restore flashback"
     echo "3. View Flashback"
     echo "4. Exit"
-    echo "5. Delete stored credentials"
     echo "=========================================="
-    read -p "Enter your choice [1-5]: " choice
+    read -p "Enter your choice [1-4]: " choice
 
     case $choice in
         1) make_backup ;;
@@ -271,9 +243,8 @@ do
             echo "Exiting..."
             exit 0 
             ;;
-        5) delete_credentials ;;
         *) 
-            echo "Invalid option. Please choose between 1 and 5."
+            echo "Invalid option. Please choose between 1 and 4."
             pause
             ;;
     esac
