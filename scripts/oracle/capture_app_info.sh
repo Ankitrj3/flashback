@@ -25,10 +25,10 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [capture_app_info] $*" >&2
 }
 
-INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-RXEST01}"
-APP_BASE_DIR="${FLASHBACK_APP_BASE_DIR:-/db8000/app/oracle/r122rxest01}"
+INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-}"
+APP_BASE_DIR="${FLASHBACK_APP_BASE_DIR:-}"
 APPS_USER="${FLASHBACK_APPS_USER:-apps}"
-APPS_PASS="${FLASHBACK_APPS_PASS:-apps}"
+APPS_PASS="${FLASHBACK_APPS_PASS:-}"
 WLS_PASS="${FLASHBACK_WLS_PASS:-}"
 OS_USER="${FLASHBACK_OS_USER:-$(whoami)}"
 
@@ -38,7 +38,7 @@ if [ "${1:-}" = "--export" ]; then
 fi
 
 DATE_TAG=$(date '+%d%b%y' | tr '[:upper:]' '[:lower:]')   # e.g. 09dec25
-BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backups/tars}"
+BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/tmp}"
 
 # =============================================================================
 # DEMO MODE
@@ -120,16 +120,30 @@ fi
 APP_NODES="${FLASHBACK_APP_NODES:-}"
 
 if [ -z "$APP_NODES" ]; then
-    log "Detecting File Systems on local node..."
-    # Attempt to resolve actual paths if they exist
-    RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-    PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-    NE_FS="$APP_BASE_DIR/fs_ne"
+    # Initialize variables as empty to enforce dynamic detection
+    RUN_FS=""
+    PATCH_FS=""
+    NE_FS=""
     
-    # Check if we can determine run/patch dynamically based on environment if it's sourced
-    if [ -n "${FILE_EDITION:-}" ] && [ -n "${RUN_BASE:-}" ]; then
-         RUN_FS="${RUN_BASE}/EBSapps/appl"
-         PATCH_FS="${FILE_EDITION}/EBSapps/appl"
+    # Dynamically query run/patch locations via SSH if we have the connection details
+    if [ -n "${FLASHBACK_APP_HOST:-}" ] && [ -n "${FLASHBACK_APP_USER:-}" ] && [ -n "${FLASHBACK_APP_ENV_FILE:-}" ]; then
+        log "Querying dynamic file system locations from $FLASHBACK_APP_HOST..."
+        remote_vars=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$FLASHBACK_APP_USER@$FLASHBACK_APP_HOST" "source ~/$FLASHBACK_APP_ENV_FILE >/dev/null 2>&1 && echo \"\$RUN_BASE|\$FILE_EDITION|\$NE_BASE\"" 2>/dev/null || echo "")
+        if [ -n "$remote_vars" ]; then
+            dyn_run=$(echo "$remote_vars" | cut -d'|' -f1)
+            dyn_patch=$(echo "$remote_vars" | cut -d'|' -f2)
+            dyn_ne=$(echo "$remote_vars" | cut -d'|' -f3)
+            
+            if [ -n "$dyn_run" ]; then RUN_FS="${dyn_run}/EBSapps/appl"; fi
+            if [ -n "$dyn_patch" ]; then PATCH_FS="${dyn_patch}/EBSapps/appl"; fi
+            if [ -n "$dyn_ne" ]; then NE_FS="${dyn_ne}"; fi
+        fi
+    else
+        # Local fallback if we run directly on the app server with variables already sourced
+        if [ -n "${FILE_EDITION:-}" ] && [ -n "${RUN_BASE:-}" ]; then
+             RUN_FS="${RUN_BASE}/EBSapps/appl"
+             PATCH_FS="${FILE_EDITION}/EBSapps/appl"
+        fi
     fi
     
     log ""

@@ -83,6 +83,13 @@ load_or_prompt_credentials() {
         chmod 600 "$ENV_FILE"
         
         echo ""
+        echo "=========================================="
+        echo "Detected Instance ID  : $FLASHBACK_INSTANCE_ID"
+        echo "Detected Hostname     : $FLASHBACK_APP_HOST"
+        echo "Detected OS User      : $FLASHBACK_APP_USER"
+        echo "Detected Env File     : $FLASHBACK_APP_ENV_FILE"
+        echo "Detected Base Dir     : $FLASHBACK_APP_BASE_DIR"
+        echo "=========================================="
         echo "Settings saved to $ENV_FILE"
         echo ""
         read -p "Press [Enter] key to continue..." fackEnterKey
