@@ -71,10 +71,12 @@ patch_base=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$APP_SSH_USER@$APP_HOST"
 
 if [ -n "$run_base" ] && [ "$run_base" != "null" ]; then
     RUN_FS="${run_base}/EBSapps/appl"
+    RUN_BASE_DIR="$run_base"
 fi
 
 if [ -n "$patch_base" ] && [ "$patch_base" != "null" ]; then
     PATCH_FS="${patch_base}/EBSapps/appl"
+    PATCH_BASE_DIR="$patch_base"
 fi
 
 # Fallback: detect via FNDLIBR process if env sourcing failed
@@ -82,12 +84,19 @@ if [ -z "$RUN_FS" ] && [ -n "$APP_BASE_DIR" ]; then
     log "WARNING: Could not source env file. Detecting RUN fs via live FNDLIBR process..."
     run_proc=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$APP_SSH_USER@$APP_HOST" \
         "ps -ef | grep '[F]NDLIBR' | awk '{print \$8}' | head -1" 2>/dev/null || echo "")
-    if echo "$run_proc" | grep -q "fs1"; then
-        RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-        PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-    else
-        RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-        PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+    # Extract the directory component directly after APP_BASE_DIR
+    run_dir=$(echo "$run_proc" | sed "s|^${APP_BASE_DIR}/||" | cut -d'/' -f1)
+    if [ -n "$run_dir" ]; then
+        RUN_BASE_DIR="$APP_BASE_DIR/$run_dir"
+        RUN_FS="$RUN_BASE_DIR/EBSapps/appl"
+        # PATCH is everything else — find via opposite listing
+        patch_dir=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$APP_SSH_USER@$APP_HOST" \
+            "ls -d '$APP_BASE_DIR'/fs* 2>/dev/null | grep -v '$run_dir' | grep -v 'fs_ne' | head -1" \
+            2>/dev/null || echo "")
+        if [ -n "$patch_dir" ]; then
+            PATCH_BASE_DIR="$patch_dir"
+            PATCH_FS="$patch_dir/EBSapps/appl"
+        fi
     fi
 fi
 
@@ -181,6 +190,8 @@ if [ "$EXPORT_MODE" = "true" ]; then
     echo "APP_RUN_FS=\"$RUN_FS\""
     echo "APP_PATCH_FS=\"$PATCH_FS\""
     echo "APP_NE_FS=\"$NE_FS\""
+    echo "APP_RUN_BASE=\"${RUN_BASE_DIR:-}\""
+    echo "APP_PATCH_BASE=\"${PATCH_BASE_DIR:-}\""
     echo "APP_PROCESS_COUNT=\"$CONN_COUNT\""
     echo "APP_SERVICES_STOPPED=\"$APP_SERVICES_STOPPED\""
 else

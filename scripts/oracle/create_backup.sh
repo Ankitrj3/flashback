@@ -37,8 +37,10 @@ SSH_KEY="${FLASHBACK_SSH_KEY:-}"
 BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/tmp}"
 
 # Dynamically received from capture_app_info.sh export
-APP_RUN_FS="${FLASHBACK_APP_RUN_FS:-}"
-APP_PATCH_FS="${FLASHBACK_APP_PATCH_FS:-}"
+# APP_RUN_BASE = raw $FILE_EDITION from 'source EBSapps.env run'   (e.g. /db6000/.../fs2)
+# APP_PATCH_BASE = raw $FILE_EDITION from 'source EBSapps.env patch' (e.g. /db6000/.../fs1)
+APP_RUN_BASE="${FLASHBACK_APP_RUN_BASE:-}"
+APP_PATCH_BASE="${FLASHBACK_APP_PATCH_BASE:-}"
 
 DATE_TAG=$(date '+%d%b%y' | tr '[:lower:]' '[:upper:]')   # e.g. 23APR26
 
@@ -60,33 +62,37 @@ if [ -z "$APP_BASE_DIR" ]; then
 fi
 
 # =============================================================================
-# DYNAMICALLY DETERMINE FS DIRS FROM FULL PATHS
+# DYNAMICALLY DETERMINE FS DIRS USING basename ON RAW FILE_EDITION PATHS
+# Works for any folder name — fs1, fs2, EBS_RUN, appl_r1, etc.
 # =============================================================================
 
-# Extract which is fs1 and which is fs2 dynamically from the full paths
-if [ -n "$APP_RUN_FS" ]; then
-    RUN_FS_DIR=$(echo "$APP_RUN_FS" | grep -oE 'fs[12]' | head -1)
-else
-    # Fallback: check FNDLIBR process on remote to determine which is RUN
-    log "WARNING: FLASHBACK_APP_RUN_FS not set. Detecting via live process..."
-    run_proc=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_USER@$APP_HOST" \
-        "ps -ef | grep '[F]NDLIBR' | awk '{print \$8}' | head -1" 2>/dev/null || echo "")
-    if echo "$run_proc" | grep -q "fs1"; then
-        RUN_FS_DIR="fs1"
-    else
-        RUN_FS_DIR="fs2"
-    fi
+RUN_FS_DIR=""
+PATCH_FS_DIR=""
+
+if [ -n "$APP_RUN_BASE" ]; then
+    # basename extracts just the folder name from the full path
+    RUN_FS_DIR=$(basename "$APP_RUN_BASE")
 fi
 
-if [ -n "$APP_PATCH_FS" ]; then
-    PATCH_FS_DIR=$(echo "$APP_PATCH_FS" | grep -oE 'fs[12]' | head -1)
-else
-    # Patch is whichever fs is NOT the run dir
-    if [ "$RUN_FS_DIR" = "fs1" ]; then
-        PATCH_FS_DIR="fs2"
-    else
-        PATCH_FS_DIR="fs1"
+if [ -n "$APP_PATCH_BASE" ]; then
+    PATCH_FS_DIR=$(basename "$APP_PATCH_BASE")
+fi
+
+# Fallback if base paths were not passed: detect via FNDLIBR process on server
+if [ -z "$RUN_FS_DIR" ] && [ -n "$APP_BASE_DIR" ]; then
+    log "WARNING: APP_RUN_BASE not set. Detecting via live FNDLIBR process..."
+    run_proc=$(ssh $SSH_OPTS "$SSH_USER@$APP_HOST" \
+        "ps -ef | grep '[F]NDLIBR' | awk '{print \$8}' | head -1" 2>/dev/null || echo "")
+    # Extract the folder name right after APP_BASE_DIR in the process path
+    RUN_FS_DIR=$(echo "$run_proc" | sed "s|^${APP_BASE_DIR}/||" | cut -d'/' -f1)
+    if [ -z "$RUN_FS_DIR" ]; then
+        log "ERROR: Could not determine RUN filesystem directory. Cannot proceed."
+        exit 3
     fi
+    # Determine PATCH by listing dirs under APP_BASE_DIR excluding RUN and fs_ne
+    PATCH_FS_DIR=$(ssh $SSH_OPTS "$SSH_USER@$APP_HOST" \
+        "ls -d '$APP_BASE_DIR'/fs* 2>/dev/null | grep -v '$RUN_FS_DIR' | grep -v 'fs_ne' | xargs -I{} basename {} | head -1" \
+        2>/dev/null || echo "")
 fi
 
 log "Starting detached parallel filesystem backups."
@@ -99,9 +105,10 @@ log "PATCH fs      : $PATCH_FS_DIR"
 log "Date tag      : $DATE_TAG"
 log ""
 
-# =============================================================================
-# BUILD BACKUP COMMANDS
-# =============================================================================
+# Full absolute paths — no cd needed
+NE_FULL_PATH="${APP_BASE_DIR}/fs_ne"
+RUN_FULL_PATH="${APP_RUN_BASE}"
+PATCH_FULL_PATH="${APP_PATCH_BASE}"
 
 ARCHIVE_NE="${BACKUP_DIR}/${INSTANCE_ID}_fs_ne_backup_${DATE_TAG}.tar"
 ARCHIVE_RUN="${BACKUP_DIR}/${INSTANCE_ID}_${RUN_FS_DIR}_Run_backup_${DATE_TAG}.tar"
@@ -122,21 +129,24 @@ SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no"
 # =============================================================================
 
 log "Launching detached backup: fs_ne"
+log "  nohup tar -cvf $ARCHIVE_NE $NE_FULL_PATH"
 # shellcheck disable=SC2086
 ssh $SSH_OPTS "$SSH_USER@$APP_HOST" \
-    "nohup sh -c 'cd \"$APP_BASE_DIR\" && tar -cvf \"$ARCHIVE_NE\" fs_ne > \"$LOG_NE\" 2>&1' </dev/null >/dev/null 2>&1 &"
+    "nohup tar -cvf '$ARCHIVE_NE' '$NE_FULL_PATH' > '$LOG_NE' 2>&1 </dev/null &"
 log "  → Launched. Log: $APP_HOST:$LOG_NE"
 
 log "Launching detached backup: $RUN_FS_DIR (RUN)"
+log "  nohup tar -cvf $ARCHIVE_RUN $RUN_FULL_PATH"
 # shellcheck disable=SC2086
 ssh $SSH_OPTS "$SSH_USER@$APP_HOST" \
-    "nohup sh -c 'cd \"$APP_BASE_DIR\" && tar -cvf \"$ARCHIVE_RUN\" $RUN_FS_DIR > \"$LOG_RUN\" 2>&1' </dev/null >/dev/null 2>&1 &"
+    "nohup tar -cvf '$ARCHIVE_RUN' '$RUN_FULL_PATH' > '$LOG_RUN' 2>&1 </dev/null &"
 log "  → Launched. Log: $APP_HOST:$LOG_RUN"
 
 log "Launching detached backup: $PATCH_FS_DIR (PATCH)"
+log "  nohup tar -cvf $ARCHIVE_PATCH $PATCH_FULL_PATH"
 # shellcheck disable=SC2086
 ssh $SSH_OPTS "$SSH_USER@$APP_HOST" \
-    "nohup sh -c 'cd \"$APP_BASE_DIR\" && tar -cvf \"$ARCHIVE_PATCH\" $PATCH_FS_DIR > \"$LOG_PATCH\" 2>&1' </dev/null >/dev/null 2>&1 &"
+    "nohup tar -cvf '$ARCHIVE_PATCH' '$PATCH_FULL_PATH' > '$LOG_PATCH' 2>&1 </dev/null &"
 log "  → Launched. Log: $APP_HOST:$LOG_PATCH"
 
 log ""

@@ -127,6 +127,8 @@ make_backup() {
     echo "Running backup command..."
     export FLASHBACK_APP_RUN_FS="$APP_RUN_FS"
     export FLASHBACK_APP_PATCH_FS="$APP_PATCH_FS"
+    export FLASHBACK_APP_RUN_BASE="$APP_RUN_BASE"
+    export FLASHBACK_APP_PATCH_BASE="$APP_PATCH_BASE"
     if ! sh "$(dirname "$0")/oracle/create_backup.sh"; then
         echo "Error: Backup command failed."
         pause
