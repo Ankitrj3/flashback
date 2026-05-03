@@ -69,8 +69,12 @@ fi
 RUN_FS_DIR=""
 PATCH_FS_DIR=""
 
+# SSH options must be defined before any SSH calls
+SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no"
+[ -n "$SSH_KEY" ] && SSH_OPTS="$SSH_OPTS -i $SSH_KEY"
+
 if [ -n "$APP_RUN_BASE" ]; then
-    # basename extracts just the folder name from the full path
+    # basename extracts just the folder name from the full path given by EBSapps.env
     RUN_FS_DIR=$(basename "$APP_RUN_BASE")
 fi
 
@@ -81,6 +85,7 @@ fi
 # Fallback if base paths were not passed: detect via FNDLIBR process on server
 if [ -z "$RUN_FS_DIR" ] && [ -n "$APP_BASE_DIR" ]; then
     log "WARNING: APP_RUN_BASE not set. Detecting via live FNDLIBR process..."
+    # shellcheck disable=SC2086
     run_proc=$(ssh $SSH_OPTS "$SSH_USER@$APP_HOST" \
         "ps -ef | grep '[F]NDLIBR' | awk '{print \$8}' | head -1" 2>/dev/null || echo "")
     # Extract the folder name right after APP_BASE_DIR in the process path
@@ -90,9 +95,13 @@ if [ -z "$RUN_FS_DIR" ] && [ -n "$APP_BASE_DIR" ]; then
         exit 3
     fi
     # Determine PATCH by listing dirs under APP_BASE_DIR excluding RUN and fs_ne
+    # shellcheck disable=SC2086
     PATCH_FS_DIR=$(ssh $SSH_OPTS "$SSH_USER@$APP_HOST" \
-        "ls -d '$APP_BASE_DIR'/fs* 2>/dev/null | grep -v '$RUN_FS_DIR' | grep -v 'fs_ne' | xargs -I{} basename {} | head -1" \
+        "ls -d '$APP_BASE_DIR'/fs* 2>/dev/null | grep -v '/$RUN_FS_DIR$' | grep -v 'fs_ne' | head -1 | xargs basename" \
         2>/dev/null || echo "")
+    # Build full paths from discovered dirs
+    APP_RUN_BASE="$APP_BASE_DIR/$RUN_FS_DIR"
+    APP_PATCH_BASE="$APP_BASE_DIR/$PATCH_FS_DIR"
 fi
 
 log "Starting detached parallel filesystem backups."
@@ -118,8 +127,6 @@ LOG_NE="${BACKUP_DIR}/${INSTANCE_ID}_fs_ne_backup_${DATE_TAG}.log"
 LOG_RUN="${BACKUP_DIR}/${INSTANCE_ID}_${RUN_FS_DIR}_Run_backup_${DATE_TAG}.log"
 LOG_PATCH="${BACKUP_DIR}/${INSTANCE_ID}_${PATCH_FS_DIR}_Patch_backup_${DATE_TAG}.log"
 
-SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no"
-[ -n "$SSH_KEY" ] && SSH_OPTS="$SSH_OPTS -i $SSH_KEY"
 
 # =============================================================================
 # LAUNCH DETACHED BACKUPS — ALL 3 IN PARALLEL
