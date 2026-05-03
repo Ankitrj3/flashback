@@ -3,20 +3,22 @@
 # capture_app_info.sh — Detect file systems, check services, stop if needed
 #
 # USAGE   : sh capture_app_info.sh [--export]
-#           eval $(sh capture_app_info.sh --export)
 #
 # EXIT    : 0 = app info captured successfully
 #           1 = check/stop failed
 #           3 = operator cancelled
 #
-# PURPOSE:
-#   Connects to the application server (or local), auto-detects the EBS file 
-#   systems (RUN, PATCH, fs_ne), checks the number of active EBS processes,
-#   prompts to stop services using adstpall.sh if running, and generates 
-#   nohup tar backup commands with date stamps.
+# HOW IT WORKS:
+#   1. SSH into the application server.
+#   2. Source EBSapps.env with 'run'   → captures $FILE_EDITION (=RUN base dir)
+#   3. Source EBSapps.env with 'patch' → captures $FILE_EDITION (=PATCH base dir)
+#   4. Derives NE dir from APP_BASE_DIR/fs_ne
+#   5. Greps live EBS processes on the remote server and shows them.
+#   6. Asks yes/no before stopping services via adstpall.sh.
 #
-# DEMO MODE:
-#   Set FLASHBACK_DEMO=true to simulate the operations.
+# EXPORTS (when --export is used):
+#   APP_RUN_FS, APP_PATCH_FS, APP_NE_FS,
+#   APP_SERVICES_STOPPED, APP_PROCESS_COUNT
 # =============================================================================
 
 set -eu
@@ -28,9 +30,12 @@ log() {
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-}"
 APP_BASE_DIR="${FLASHBACK_APP_BASE_DIR:-}"
 APPS_USER="${FLASHBACK_APPS_USER:-apps}"
-APPS_PASS="${FLASHBACK_APPS_PASS:-}"
 WLS_PASS="${FLASHBACK_WLS_PASS:-}"
 OS_USER="${FLASHBACK_OS_USER:-$(whoami)}"
+APP_HOST="${FLASHBACK_APP_HOST:-}"
+APP_SSH_USER="${FLASHBACK_APP_USER:-}"
+ENV_FILE="${FLASHBACK_APP_ENV_FILE:-}"
+BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/tmp}"
 
 EXPORT_MODE="false"
 if [ "${1:-}" = "--export" ]; then
@@ -38,128 +43,139 @@ if [ "${1:-}" = "--export" ]; then
 fi
 
 DATE_TAG=$(date '+%d%b%y' | tr '[:upper:]' '[:lower:]')   # e.g. 09dec25
-BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/tmp}"
 
 # =============================================================================
-# REAL MODE
+# STEP 1: Source EBSapps.env run → get RUN_FS
+#         Source EBSapps.env patch → get PATCH_FS
 # =============================================================================
 
-# In real mode, we typically execute locally if running on the app node, or via SSH if remote.
-# For simplicity, assuming local execution on app node or single-node EBS if no SSH variables provided.
-APP_NODES="${FLASHBACK_APP_NODES:-}"
+RUN_FS=""
+PATCH_FS=""
+NE_FS=""
 
-if [ -z "$APP_NODES" ]; then
-    # Initialize variables as empty to enforce dynamic detection
-    RUN_FS=""
-    PATCH_FS=""
-    NE_FS=""
-    
-    # Dynamically query run/patch locations via SSH if we have the connection details
-    if [ -n "${FLASHBACK_APP_HOST:-}" ] && [ -n "${FLASHBACK_APP_USER:-}" ] && [ -n "${FLASHBACK_APP_ENV_FILE:-}" ]; then
-        log "Querying dynamic file system locations from $FLASHBACK_APP_HOST..."
-        
-        # Try sourcing with 'run' argument, which is standard for EBS 12.2 wrapper scripts
-        remote_vars=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$FLASHBACK_APP_USER@$FLASHBACK_APP_HOST" "source ~/$FLASHBACK_APP_ENV_FILE run >/dev/null 2>&1 && echo \"\$RUN_BASE|\$FILE_EDITION|\$NE_BASE\"" 2>/dev/null || echo "")
-        
-        if [ -n "$remote_vars" ] && [ "$remote_vars" != "||" ]; then
-            dyn_run=$(echo "$remote_vars" | cut -d'|' -f1)
-            dyn_patch=$(echo "$remote_vars" | cut -d'|' -f2)
-            dyn_ne=$(echo "$remote_vars" | cut -d'|' -f3)
-            
-            if [ -n "$dyn_run" ] && [ "$dyn_run" != "null" ]; then RUN_FS="${dyn_run}/EBSapps/appl"; fi
-            if [ -n "$dyn_patch" ] && [ "$dyn_patch" != "null" ]; then PATCH_FS="${dyn_patch}/EBSapps/appl"; fi
-            if [ -n "$dyn_ne" ] && [ "$dyn_ne" != "null" ]; then NE_FS="${dyn_ne}"; fi
-        fi
-        
-        # Smart Fallback if environment variables are empty (e.g., if env file doesn't export them)
-        if [ -z "$RUN_FS" ] && [ -n "$APP_BASE_DIR" ]; then
-            # Attempt to find which one is RUN by checking running FNDLIBR processes
-            run_proc=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$FLASHBACK_APP_USER@$FLASHBACK_APP_HOST" "ps -ef | grep '[F]NDLIBR' | awk '{print \$8}' | head -1" 2>/dev/null || echo "")
-            if echo "$run_proc" | grep -q "fs1"; then
-                RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-                PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-            else
-                # Default to fs2 as RUN if process check fails or shows fs2
-                RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-                PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-            fi
-            NE_FS="$APP_BASE_DIR/fs_ne"
-        fi
+if [ -z "$APP_HOST" ] || [ -z "$APP_SSH_USER" ] || [ -z "$ENV_FILE" ]; then
+    log "ERROR: FLASHBACK_APP_HOST, FLASHBACK_APP_USER, and FLASHBACK_APP_ENV_FILE must be set."
+    exit 1
+fi
+
+log "Detecting File Systems on $APP_HOST..."
+log ""
+
+# Source with 'run' argument to get the RUN file system base directory
+run_base=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$APP_SSH_USER@$APP_HOST" \
+    "source ~/$ENV_FILE run >/dev/null 2>&1 && echo \"\$FILE_EDITION\"" 2>/dev/null || echo "")
+
+# Source with 'patch' argument to get the PATCH file system base directory
+patch_base=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$APP_SSH_USER@$APP_HOST" \
+    "source ~/$ENV_FILE patch >/dev/null 2>&1 && echo \"\$FILE_EDITION\"" 2>/dev/null || echo "")
+
+if [ -n "$run_base" ] && [ "$run_base" != "null" ]; then
+    RUN_FS="${run_base}/EBSapps/appl"
+fi
+
+if [ -n "$patch_base" ] && [ "$patch_base" != "null" ]; then
+    PATCH_FS="${patch_base}/EBSapps/appl"
+fi
+
+# Fallback: detect via FNDLIBR process if env sourcing failed
+if [ -z "$RUN_FS" ] && [ -n "$APP_BASE_DIR" ]; then
+    log "WARNING: Could not source env file. Detecting RUN fs via live FNDLIBR process..."
+    run_proc=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$APP_SSH_USER@$APP_HOST" \
+        "ps -ef | grep '[F]NDLIBR' | awk '{print \$8}' | head -1" 2>/dev/null || echo "")
+    if echo "$run_proc" | grep -q "fs1"; then
+        RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+        PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
     else
-        # Local fallback if we run directly on the app server with variables already sourced
-        if [ -n "${FILE_EDITION:-}" ] && [ -n "${RUN_BASE:-}" ]; then
-             RUN_FS="${RUN_BASE}/EBSapps/appl"
-             PATCH_FS="${FILE_EDITION}/EBSapps/appl"
-        fi
-        if [ -z "$RUN_FS" ] && [ -n "$APP_BASE_DIR" ]; then
-             RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-             PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-             NE_FS="$APP_BASE_DIR/fs_ne"
-        fi
+        RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+        PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
     fi
-    
+fi
+
+# Derive NE filesystem from base dir
+if [ -n "$APP_BASE_DIR" ]; then
+    NE_FS="$APP_BASE_DIR/fs_ne"
+fi
+
+log "Application File Systems Detected:"
+log "  RUN File System           : $RUN_FS"
+log "  PATCH File System         : $PATCH_FS"
+log "  Non-Editioned File System : $NE_FS"
+log ""
+
+# =============================================================================
+# STEP 2: Grep live EBS processes on the application server
+# =============================================================================
+
+log "Checking active EBS processes on $APP_HOST for user '$APP_SSH_USER'..."
+log ""
+
+# Get list of meaningful EBS processes running on the remote server
+PROC_LIST=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$APP_SSH_USER@$APP_HOST" \
+    "ps -ef | grep -E '(FNDLIBR|FNDSM|apache|opmn|oacore|forms|WebLogic|WLS|java)' | grep -v grep | grep -v sshd" \
+    2>/dev/null || echo "")
+
+CONN_COUNT=0
+if [ -n "$PROC_LIST" ]; then
+    CONN_COUNT=$(echo "$PROC_LIST" | wc -l | tr -d ' ')
+fi
+
+if [ "$CONN_COUNT" -gt 0 ]; then
+    log "Found $CONN_COUNT active EBS process(es):"
+    log "-----------------------------------------------------------"
+    echo "$PROC_LIST" | while IFS= read -r proc_line; do
+        log "  $proc_line"
+    done >&2
+    log "-----------------------------------------------------------"
     log ""
-    log "Application File Systems Detected:"
-    log "  RUN File System           : $RUN_FS"
-    log "  PATCH File System         : $PATCH_FS"
-    log "  Non-Editioned File System : $NE_FS"
+else
+    log "No active EBS processes found on $APP_HOST."
     log ""
-    
-    log "Checking active connections for user '$OS_USER'..."
-    CONN_COUNT=$(ps -ef | grep "$OS_USER" | grep -v sh | grep -v sshd | grep -v "ps -ef" | grep -v grep | wc -l | tr -d ' ')
-    log "Found $CONN_COUNT active connections."
-    
-    APP_SERVICES_STOPPED="true"
-    
-    if [ "$CONN_COUNT" -gt 0 ]; then
-        printf "  Do you want to stop the application? (yes/no): " >&2
-        read -r stop_app
-        
-        if [ "$stop_app" = "yes" ]; then
-            log "Stopping application using adstpall.sh..."
-            # Check if adstpall.sh exists in PATH or find it
-            ADSTPALL_PATH=$(command -v adstpall.sh || find "$APP_BASE_DIR" -name adstpall.sh 2>/dev/null | head -1)
-            
-            if [ -n "$ADSTPALL_PATH" ]; then
-                log "Found adstpall.sh at $ADSTPALL_PATH"
-                
-                # Execute adstpall.sh interactively so user can enter passwords if needed
-                sh "$ADSTPALL_PATH" >&2
-                if [ $? -eq 0 ]; then
-                    log "Application services stopped."
-                else
-                    log "WARNING: adstpall.sh returned non-zero status. Please check."
-                    APP_SERVICES_STOPPED="false"
-                fi
+fi
+
+# =============================================================================
+# STEP 3: Ask before stopping
+# =============================================================================
+
+APP_SERVICES_STOPPED="false"
+
+if [ "$CONN_COUNT" -gt 0 ]; then
+    printf "  Do you want to stop the application services? (yes/no): " >&2
+    read -r stop_app
+
+    if [ "$stop_app" = "yes" ]; then
+        log "Stopping application via adstpall.sh on $APP_HOST..."
+
+        # Find adstpall.sh on remote server
+        ADSTPALL_PATH=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$APP_SSH_USER@$APP_HOST" \
+            "find $APP_BASE_DIR -name adstpall.sh 2>/dev/null | head -1" 2>/dev/null || echo "")
+
+        if [ -n "$ADSTPALL_PATH" ]; then
+            log "Found adstpall.sh at $ADSTPALL_PATH"
+            log "Running adstpall.sh interactively (enter APPS and WLS passwords when prompted)..."
+            ssh -t "$APP_SSH_USER@$APP_HOST" "sh '$ADSTPALL_PATH'"
+            if [ $? -eq 0 ]; then
+                log "Application services stopped successfully."
+                APP_SERVICES_STOPPED="true"
             else
-                log "ERROR: adstpall.sh not found. Cannot stop services automatically."
+                log "WARNING: adstpall.sh returned non-zero status. Please verify manually."
                 APP_SERVICES_STOPPED="false"
             fi
         else
-            log "Skipping application shutdown."
+            log "ERROR: adstpall.sh not found under $APP_BASE_DIR on $APP_HOST."
             APP_SERVICES_STOPPED="false"
         fi
+    else
+        log "Skipping application shutdown."
+        APP_SERVICES_STOPPED="false"
     fi
 else
-    log "App node list provided ($APP_NODES). File system detection on remote node not fully implemented in this script yet."
-    log "Relying on base directory: $APP_BASE_DIR"
-    RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-    PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-    NE_FS="$APP_BASE_DIR/fs_ne"
-    CONN_COUNT=0
-    APP_SERVICES_STOPPED="true" # Assuming shutdown script handles remote nodes
+    # No processes running, consider it already stopped
+    APP_SERVICES_STOPPED="true"
 fi
 
-log ""
-log "Generated Backup Commands:"
-CMD_NE="nohup tar -cvf $BACKUP_DIR/${INSTANCE_ID}_fs_ne_backup_$DATE_TAG.tar fs_ne &"
-CMD_FS1="nohup tar -cvf $BACKUP_DIR/${INSTANCE_ID}_fs1_Patch_backup_$DATE_TAG.tar fs1 &"
-CMD_FS2="nohup tar -cvf $BACKUP_DIR/${INSTANCE_ID}_fs2_Run_backup_$DATE_TAG.tar fs2 &"
-
-log "  $CMD_NE"
-log "  $CMD_FS1"
-log "  $CMD_FS2"
-log ""
+# =============================================================================
+# STEP 4: Export variables for the calling script
+# =============================================================================
 
 if [ "$EXPORT_MODE" = "true" ]; then
     echo "APP_RUN_FS=\"$RUN_FS\""
@@ -167,9 +183,6 @@ if [ "$EXPORT_MODE" = "true" ]; then
     echo "APP_NE_FS=\"$NE_FS\""
     echo "APP_PROCESS_COUNT=\"$CONN_COUNT\""
     echo "APP_SERVICES_STOPPED=\"$APP_SERVICES_STOPPED\""
-    echo "BACKUP_CMD_NE=\"$CMD_NE\""
-    echo "BACKUP_CMD_FS1=\"$CMD_FS1\""
-    echo "BACKUP_CMD_FS2=\"$CMD_FS2\""
 else
     log "App info capture complete. Use: eval \$(sh capture_app_info.sh --export)"
 fi
