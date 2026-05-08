@@ -1,35 +1,5 @@
 #!/usr/bin/env sh
-# =============================================================================
-# list_restore_points.sh — Query live V$RESTORE_POINT from Oracle
-#
-# USAGE   : sh list_restore_points.sh
-# EXIT    : 0 = query successful (output on stdout in CSV-friendly format)
-#           1 = sqlplus query failed
-#           2 = sqlplus not available
-#
-# PURPOSE:
-#   Provides the Restore workflow with a LIVE list of restore points directly
-#   from Oracle V$RESTORE_POINT. The GUI parses this output to populate the
-#   restore point dropdown instead of relying on the static demo JSON file.
-#
-# CLIENT ENVIRONMENT (RXEST01):
-#   Source env : . ./rxecst01.sh
-#   Connect    : sqlplus / as sysdba
-#   Query      : SELECT NAME, TIME, GUARANTEE_FLASHBACK_DATABASE,
-#                       STORAGE_SIZE, PDB_RESTORE_POINT, CON_ID
-#                FROM V$RESTORE_POINT ORDER BY TIME;
-#
-# OUTPUT FORMAT (aligned for terminal):
-#   Outputs a cleanly aligned table directly to the console.
-#
-# DEMO MODE:
-#   Outputs the same table using demo/restore_points.json content (simulated).
-#
-# CONFIGURATION (environment variables):
-#   FLASHBACK_ORACLE_ENV    Path to Oracle env file
-#   FLASHBACK_DB_AUTH       "os" or "network"
-#   FLASHBACK_INSTANCE_ID   Instance prefix
-# =============================================================================
+# Query live V$RESTORE_POINT from Oracle.
 
 set -eu
 
@@ -37,35 +7,6 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [list_restore_points] $*" >&2
 }
 
-INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-RXEST01}"
-
-# =============================================================================
-# DEMO MODE — Output matches the client's V$RESTORE_POINT format
-# =============================================================================
-if [ "${FLASHBACK_DEMO:-false}" = "true" ]; then
-    log "DEMO MODE: Outputting simulated V\$RESTORE_POINT data."
-
-    # Header line
-    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "NAME" "TIME" "GUA" "STORAGE_SIZE" "PDB" "CON_ID"
-    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "---------------------------------------------" "-------------------------" "---" "---------------" "---" "------"
-
-    # Simulated rows
-    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_CDB_26MARCH2026_DATA" "26-MAR-26 06.31.28 PM" "YES" "2.4484E+12" "NO" "0"
-    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_PDB_26MARCH2026_DATA" "26-MAR-26 06.31.28 PM" "YES" "2.6322E+11" "YES" "4"
-    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_CDB_04082026" "08-APR-26 05.42.18 PM" "YES" "0" "NO" "0"
-    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_CDB_flashback_restore_11FEB26" "11-FEB-26 14.00.00 PM" "YES" "2.4484E+12" "NO" "0"
-    printf "%-45s %-25s %-4s %-15s %-4s %-6s\n" "${INSTANCE_ID}_PDB_flashback_restore_11FEB26" "11-FEB-26 14.00.00 PM" "YES" "2.6322E+11" "YES" "4"
-    echo ""
-
-    log "DEMO: 5 restore points returned (simulated)."
-    exit 0
-fi
-
-# =============================================================================
-# REAL MODE
-# =============================================================================
-
-# ---- Source Oracle environment ----
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
 if [ -n "$ORACLE_ENV" ] && [ -f "$ORACLE_ENV" ]; then
     log "Sourcing Oracle environment: $ORACLE_ENV"
@@ -75,7 +16,7 @@ elif [ -n "$ORACLE_ENV" ]; then
     log "WARNING: Oracle env file not found: $ORACLE_ENV"
 fi
 
-if ! command -v sqlplus > /dev/null 2>&1; then
+if ! command -v sqlplus >/dev/null 2>&1; then
     log "ERROR: sqlplus not found on PATH."
     exit 2
 fi
@@ -89,7 +30,6 @@ fi
 
 log "Querying V\$RESTORE_POINT from Oracle ..."
 
-# Query: neatly formatted terminal table
 sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
@@ -97,11 +37,11 @@ SET PAGES 220
 SET HEAD ON
 SET FEED OFF
 SET LINE 200
-
 COL TIME FOR A40
 COL NAME FOR A40
-
-SELECT NAME, TIME,GUARANTEE_FLASHBACK_DATABASE,STORAGE_SIZE,PDB_RESTORE_POINT,CON_ID  FROM V\$RESTORE_POINT order by TIME;
+SELECT NAME,TIME,GUARANTEE_FLASHBACK_DATABASE,STORAGE_SIZE,PDB_RESTORE_POINT,CON_ID
+FROM V\$RESTORE_POINT
+ORDER BY TIME;
 EXIT;
 EOF
 

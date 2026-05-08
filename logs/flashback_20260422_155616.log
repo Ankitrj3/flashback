@@ -1,6 +1,0 @@
-2026-04-22 15:56:16,237 | INFO | Logging started: E:\Task\flashback\logs\flashback_20260422_155616.log
-2026-04-22 15:56:35,953 | INFO | Running: ['C:\\Program Files\\Git\\bin\\bash.exe', 'E:\\Task\\flashback\\scripts\\create_backup.sh']
-2026-04-22 15:56:37,370 | INFO | Running: ['C:\\Program Files\\Git\\bin\\bash.exe', 'E:\\Task\\flashback\\scripts\\create_flashback_restore_point.sh']
-2026-04-22 15:57:26,688 | INFO | Running: ['C:\\Program Files\\Git\\bin\\bash.exe', 'E:\\Task\\flashback\\scripts\\create_backup.sh']
-2026-04-22 15:57:28,008 | INFO | Running: ['C:\\Program Files\\Git\\bin\\bash.exe', 'E:\\Task\\flashback\\scripts\\restore_backup.sh', 'FB_DEMO_20260420_0910']
-2026-04-22 15:57:29,320 | INFO | Running: ['C:\\Program Files\\Git\\bin\\bash.exe', 'E:\\Task\\flashback\\scripts\\flashback_to_restore_point.sh', 'FB_DEMO_20260420_0910']

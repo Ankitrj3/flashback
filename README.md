@@ -1,115 +1,148 @@
-# Oracle Flashback Management Tool
+# Oracle EBS Flashback Automation
 
-A comprehensive bash-based solution for managing Oracle Database flashback points and backups.
+Production-ready Phase 1/2 automation for Oracle EBS flashback preparation from the DB server.
 
-FLASHBACK_DEMO=true ./scripts/oracle_flashback_menu.sh
+## Scope
 
-## Quick Start
+1. **View Flashback**
+   - Show DB guaranteed restore points from `V$RESTORE_POINT`.
+   - Show application tar backups from `/iriscommon/backups/tars`.
+   - Show restore history by grepping the DB alert log for `Flashback restore`.
 
-### Prerequisites
-- Oracle Database installed and running
-- Oracle client tools configured
-- Bash shell environment
+2. **Make flashback request**
+   - Detect DB name, DB hostname, PDB name, and alert log path from Oracle.
+   - Create CDB guaranteed restore point.
+   - Switch to PDB and create PDB guaranteed restore point.
+   - Show current restore points.
+   - Check application services from the DB server using SSH.
+   - If application services are running, ask whether to continue backup as-is or shutdown first.
+   - If shutdown is selected, stop services and verify application processes are down.
+   - Take tar backups for `fs_ne`, `fs1`, and `fs2`.
 
-### Installation
+`Restore flashback` and `Validate system ready for Load test` are visible in the menu as next-phase placeholders.
 
-1. Clone or extract this repository:
+## Run
+
+Run from the DB server:
+
 ```bash
-cd /Users/ankitrj3/Desktop/flashback
-```
-
-2. Make scripts executable:
-```bash
-chmod +x ./scripts/*.sh
-chmod +x ./scripts/oracle/*.sh
-```
-
-## Running the Application
-
-### Interactive Menu (Recommended)
-```bash
+chmod +x scripts/oracle_flashback_menu.sh scripts/oracle/*.sh
 ./scripts/oracle_flashback_menu.sh
 ```
 
-This provides a user-friendly menu with options to:
-- **Create Backup & Flashback Point** - Backup database and create a restore point
-- **Restore from Flashback** - Revert database to a previous state (requires confirmation)
-- **List Restore Points** - View all available flashback points
-- **Test Connectivity** - Verify database connection
-- **Shutdown App Services** - Stop application services before flashback
+Default execution mode is `dry-run`. It prints the DB commands, shutdown actions, and tar commands without changing the database or filesystems.
 
-### CLI Execution
+Live execution:
+
 ```bash
-./scripts/run_cli.sh
+FLASHBACK_MODE=real ./scripts/oracle_flashback_menu.sh
 ```
 
-## Demo Workflow
+This one setting is the intended switch from demo to live action. If `~/.flashback_env` already contains `FLASHBACK_MODE=dry-run`, the command-line value `FLASHBACK_MODE=real` still wins for that run and is saved back to the config. You can also change mode from the menu.
 
-### 1. Test Connectivity
+## Values
+
+The tool auto-detects DB-side values using `sqlplus / as sysdba`:
+
 ```bash
-./scripts/oracle/test_connectivity.sh
+FLASHBACK_INSTANCE_ID
+FLASHBACK_DB_HOST
+FLASHBACK_PDB_NAME
+FLASHBACK_ALERT_LOG
+FLASHBACK_MODE
 ```
-Verifies your database is accessible.
 
-### 2. Create a Backup Point
+The operator confirms environment-specific application values:
+
 ```bash
-./scripts/oracle/create_backup.sh
-./scripts/oracle/create_flashback_restore_point.sh
+FLASHBACK_APP_HOST
+FLASHBACK_SSH_USER
+FLASHBACK_APP_BASE_DIR
+FLASHBACK_BACKUP_DIR
 ```
-Creates a backup and associated flashback restore point.
 
-### 3. View Available Restore Points
+Shutdown credentials are requested only when application services are running and shutdown is approved:
+
 ```bash
-./scripts/oracle/list_restore_points.sh
+FLASHBACK_APPS_USER
+FLASHBACK_APPS_PASS
+FLASHBACK_WLS_PASS
 ```
-Lists all available flashback restore points.
 
-### 4. Restore from a Point (if needed)
+Values are stored in:
+
 ```bash
-./scripts/oracle/flashback_to_restore_point.sh
-```
-Restores database to a previous state.
-
-## Project Structure
-
-```
-scripts/
-├── oracle_flashback_menu.sh      # Main interactive menu
-├── run_cli.sh                     # CLI entry point
-├── package.sh                     # Packaging utility
-└── oracle/
-    ├── create_backup.sh           # Backup creation
-    ├── create_flashback_restore_point.sh
-    ├── flashback_to_restore_point.sh
-    ├── list_restore_points.sh
-    ├── restore_backup.sh
-    ├── shutdown_app_services.sh
-    └── test_connectivity.sh
+~/.flashback_env
 ```
 
-## Features
+The file is protected with `600` permissions. It can be removed from the menu with `Delete stored config`.
 
-✓ Interactive menu-driven interface  
-✓ Automated backup creation  
-✓ Flashback restore point management  
-✓ Database connectivity testing  
-✓ Application service shutdown before restore  
-✓ Double-confirmation for restore operations  
+## Why Some Values Are Required
 
-## Safety Features
+DB name, DB host, PDB name, and alert log path can be detected because the automation runs from the DB server.
 
-- **Double Confirmation**: Restore operations require user confirmation to prevent accidental data loss
-- **Service Shutdown**: Can gracefully shutdown app services before flashback
-- **Connectivity Check**: Verify database is available before operations
+Application host, SSH user, app base directory, backup directory, and application shutdown credentials are environment-specific. They must be confirmed because the DB server cannot safely infer the correct EBS application node, mount path, or credential policy in every environment.
 
-## Troubleshooting
+## Scripts
 
-- Ensure Oracle database is running and accessible
-- Verify database credentials are configured
-- Check that flashback database is enabled on your Oracle instance
-- Run `test_connectivity.sh` to diagnose connection issues
+- `scripts/oracle_flashback_menu.sh`
+  Main interactive menu and config loader.
 
-## License
+- `scripts/oracle/detect_environment.sh`
+  Detects DB name, DB hostname, PDB name, and alert log path.
 
-See LICENSE file for details.
+- `scripts/oracle/view_flashback.sh`
+  Implements menu option 1.
 
+- `scripts/oracle/list_restore_points.sh`
+  Runs the `V$RESTORE_POINT` query.
+
+- `scripts/oracle/create_flashback_restore_point.sh`
+  Creates CDB and PDB guaranteed restore points.
+
+- `scripts/oracle/capture_app_info.sh`
+  Shows app file-system paths, checks app services, and handles the continue-or-shutdown backup decision.
+
+- `scripts/oracle/create_backup.sh`
+  Creates application tar backups for `fs_ne`, `fs1`, and `fs2`.
+
+## Backup Decision
+
+If application processes are detected, the tool asks whether to continue the backup while services are running. If the operator answers `no`, it asks whether to shutdown application services first. In `dry-run`, both paths print the intended actions. In `real`, shutdown uses `adstpall.sh` by default and then checks application processes again.
+
+## Dry-Run Demo
+
+Use dry-run mode for walkthroughs:
+
+```bash
+FLASHBACK_MODE=dry-run ./scripts/oracle_flashback_menu.sh
+```
+
+For a dry-run where app services appear to be running:
+
+```bash
+FLASHBACK_MODE=dry-run FLASHBACK_DRY_RUN_PROCESS_COUNT=274 ./scripts/oracle_flashback_menu.sh
+```
+
+This exercises the shutdown decision path without stopping services or creating tar files.
+
+## Live Execution Checklist
+
+Before running real actions, validate these items on the DB server:
+
+- `sqlplus / as sysdba` works for the Oracle owner or `FLASHBACK_DB_AUTH` credentials are configured.
+- Database is in `ARCHIVELOG` mode and `FLASHBACK_ON=YES`.
+- Correct `FLASHBACK_PDB_NAME`, `FLASHBACK_APP_HOST`, `FLASHBACK_SSH_USER`, `FLASHBACK_APP_BASE_DIR`, and `FLASHBACK_BACKUP_DIR` are saved in `~/.flashback_env`.
+- SSH from the DB server to each application node works without an interactive OS-password prompt.
+- The backup directory exists or can be created, is writable, and has enough free space for `fs_ne`, `fs1`, and `fs2`.
+- The operator has confirmed whether application services may remain running during backup, or has valid APPS/WebLogic credentials for shutdown.
+
+Real action requires one of these:
+
+```bash
+FLASHBACK_MODE=real ./scripts/oracle_flashback_menu.sh
+```
+
+or choose `Change execution mode` from the menu and type `REAL`.
+
+The workflow still requires an explicit `YES` confirmation before `Make flashback request` proceeds.
