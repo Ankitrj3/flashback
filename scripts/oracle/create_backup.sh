@@ -8,11 +8,10 @@ log() {
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
-# Include time in backup artifacts to prevent same-day reruns from overwriting
-# earlier tar/log files.
-DATE_TAG=$(date '+%d%b%y_%H%M%S' | tr '[:lower:]' '[:upper:]')
+# Client runbook format, for example 09dec25.
+DATE_TAG=$(date '+%d%b%y' | tr '[:upper:]' '[:lower:]')
 APP_BASE_DIR="${FLASHBACK_APP_BASE_DIR:-/db800/app/oracle/r122${INSTANCE_ID}}"
-BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backups/tars}"
+BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backup/tar}"
 FS_LIST="${FLASHBACK_FS_LIST:-fs_ne fs1 fs2}"
 APP_NODES="${FLASHBACK_APP_NODES:-${FLASHBACK_APP_HOST:-}}"
 SSH_USER="${FLASHBACK_SSH_USER:-$(whoami)}"
@@ -24,6 +23,9 @@ log "Instance     : $INSTANCE_ID"
 log "Base dir     : $APP_BASE_DIR"
 log "Backup dir   : $BACKUP_DIR"
 log "Filesystems  : $FS_LIST"
+log "RUN FS       : ${FLASHBACK_RUN_FS:-$APP_BASE_DIR/fs2/EBSapps/appl}"
+log "PATCH FS     : ${FLASHBACK_PATCH_FS:-$APP_BASE_DIR/fs1/EBSapps/appl}"
+log "NE FS        : ${FLASHBACK_NE_FS:-$APP_BASE_DIR/fs_ne}"
 log "Date tag     : $DATE_TAG"
 log "Mode         : $FLASHBACK_MODE"
 

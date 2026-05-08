@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Shows DB restore points, application tar files, and alert-log restore history.
 # 1. When GRP was secured: DB restore points + application tar files.
-# 2. When GRP was restored: alert log lines containing "Flashback restore".
+# 2. When GRP was restored: parse alert log timings around "Flashback restore".
 
 set -eu
 
@@ -10,7 +10,7 @@ log() {
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
-BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backups/tars}"
+BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backup/tar}"
 APP_HOST="${FLASHBACK_APP_HOST:-}"
 SSH_USER="${FLASHBACK_SSH_USER:-$(whoami)}"
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
@@ -92,16 +92,39 @@ show_restore_history() {
         return
     fi
 
-    matches=$(grep -in -B1 "Flashback restore" "$alert_file" || true)
+    matches=$(grep -iin -B1 "Flashback restore" "$alert_file" || true)
     if [ -z "$matches" ]; then
         log "No 'Flashback restore' entries found."
         return
     fi
 
-    echo "$matches"
+    echo "Event                         Timing"
+    echo "----------------------------  ----------------------------------------"
+    awk '
+        function trim(value) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            return value
+        }
+        {
+            line = trim($0)
+            lower = tolower(line)
+            if (line ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/ ||
+                line ~ /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[[:space:]]+[A-Z][a-z][a-z][[:space:]]+/ ||
+                line ~ /^[A-Z][a-z][a-z][[:space:]]+[A-Z][a-z][a-z][[:space:]]+[0-9][0-9]?[[:space:]]+/) {
+                last_time = line
+            }
+            if (lower ~ /flashback restore start/) {
+                printf "%-28s  %s\n", "Flashback Restore Start", (last_time ? last_time : "timestamp not found")
+            }
+            if (lower ~ /flashback restore complete/) {
+                printf "%-28s  %s\n", "Flashback Restore Complete", (last_time ? last_time : "timestamp not found")
+            }
+        }
+    ' "$alert_file"
+
     echo ""
-    log "The line above 'Flashback Restore Start' is the restore start timestamp when Oracle writes timestamp lines separately."
-    log "The line above 'Flashback Restore Complete' is the restore completed timestamp when Oracle writes timestamp lines separately."
+    log "Raw matching alert log context:"
+    echo "$matches"
 }
 
 show_restore_points

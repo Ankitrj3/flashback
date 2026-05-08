@@ -6,8 +6,8 @@ Production-ready Phase 1/2 automation for Oracle EBS flashback preparation from 
 
 1. **View Flashback**
    - Show DB guaranteed restore points from `V$RESTORE_POINT`.
-   - Show application tar backups from `/iriscommon/backups/tars`.
-   - Show restore history by grepping the DB alert log for `Flashback restore`.
+   - Show application tar backups from `/iriscommon/backup/tar`.
+   - Show restore history timings by grepping the DB alert log for `Flashback restore`.
 
 2. **Make flashback request**
    - Detect DB name, DB hostname, PDB name, and alert log path from Oracle.
@@ -17,7 +17,7 @@ Production-ready Phase 1/2 automation for Oracle EBS flashback preparation from 
    - Check application services from the DB server using SSH.
    - If application services are running, ask whether to continue backup as-is or shutdown first.
    - If shutdown is selected, stop services and verify application processes are down.
-   - Take tar backups for `fs_ne`, `fs1`, and `fs2`.
+   - Take tar backups for `fs_ne`, `fs1`, and `fs2` under `/iriscommon/backup/tar`.
 
 `Restore flashback` and `Validate system ready for Load test` are visible in the menu as next-phase placeholders.
 
@@ -61,6 +61,12 @@ FLASHBACK_APP_BASE_DIR
 FLASHBACK_BACKUP_DIR
 ```
 
+The default backup directory follows the client runbook:
+
+```bash
+/iriscommon/backup/tar
+```
+
 Shutdown credentials are requested only when application services are running and shutdown is approved:
 
 ```bash
@@ -92,7 +98,7 @@ Application host, SSH user, app base directory, backup directory, and applicatio
   Detects DB name, DB hostname, PDB name, and alert log path.
 
 - `scripts/oracle/view_flashback.sh`
-  Implements menu option 1.
+  Implements menu option 1, including a parsed start/complete timing view from the DB alert log.
 
 - `scripts/oracle/list_restore_points.sh`
   Runs the `V$RESTORE_POINT` query.
@@ -104,7 +110,7 @@ Application host, SSH user, app base directory, backup directory, and applicatio
   Shows app file-system paths, checks app services, and handles the continue-or-shutdown backup decision.
 
 - `scripts/oracle/create_backup.sh`
-  Creates application tar backups for `fs_ne`, `fs1`, and `fs2`.
+  Creates application tar backups for `fs_ne`, `fs1`, and `fs2` using the client date format, for example `09dec25`.
 
 ## Backup Decision
 

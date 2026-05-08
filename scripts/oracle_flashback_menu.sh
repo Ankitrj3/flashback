@@ -3,6 +3,7 @@ set -u
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ENV_FILE="$HOME/.flashback_env"
+APP_INFO_FILE="$HOME/.flashback_app_info"
 REQUESTED_FLASHBACK_MODE="${FLASHBACK_MODE:-}"
 
 pause() {
@@ -69,8 +70,8 @@ load_or_prompt_config() {
         read -r -p "Enter application base dir (example: /db800/app/oracle/r122${FLASHBACK_INSTANCE_ID}): " FLASHBACK_APP_BASE_DIR
     fi
     if [ -z "${FLASHBACK_BACKUP_DIR:-}" ]; then
-        read -r -p "Enter app tar backup dir (default: /iriscommon/backups/tars): " FLASHBACK_BACKUP_DIR
-        FLASHBACK_BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backups/tars}"
+        read -r -p "Enter app tar backup dir (default: /iriscommon/backup/tar): " FLASHBACK_BACKUP_DIR
+        FLASHBACK_BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backup/tar}"
     fi
     FLASHBACK_APPS_USER="${FLASHBACK_APPS_USER:-apps}"
     FLASHBACK_APPS_PASS="${FLASHBACK_APPS_PASS:-}"
@@ -91,6 +92,7 @@ load_or_prompt_config() {
         printf 'export FLASHBACK_APP_BASE_DIR=%q\n' "$FLASHBACK_APP_BASE_DIR"
         printf 'export FLASHBACK_BACKUP_DIR=%q\n' "$FLASHBACK_BACKUP_DIR"
         printf 'export FLASHBACK_ALERT_LOG=%q\n' "${FLASHBACK_ALERT_LOG:-}"
+        printf 'export FLASHBACK_APP_INFO_FILE=%q\n' "$APP_INFO_FILE"
         printf 'export FLASHBACK_APPS_USER=%q\n' "$FLASHBACK_APPS_USER"
         printf 'export FLASHBACK_APPS_PASS=%q\n' "$FLASHBACK_APPS_PASS"
         printf 'export FLASHBACK_WLS_PASS=%q\n' "$FLASHBACK_WLS_PASS"
@@ -101,7 +103,7 @@ load_or_prompt_config() {
 
     export FLASHBACK_INSTANCE_ID FLASHBACK_PDB_NAME FLASHBACK_ORACLE_ENV FLASHBACK_DB_HOST
     export FLASHBACK_APP_HOST FLASHBACK_SSH_USER FLASHBACK_APP_BASE_DIR FLASHBACK_BACKUP_DIR
-    export FLASHBACK_ALERT_LOG FLASHBACK_APPS_USER FLASHBACK_APPS_PASS FLASHBACK_WLS_PASS FLASHBACK_MODE FLASHBACK_DRY_RUN_PROCESS_COUNT
+    export FLASHBACK_ALERT_LOG FLASHBACK_APP_INFO_FILE FLASHBACK_APPS_USER FLASHBACK_APPS_PASS FLASHBACK_WLS_PASS FLASHBACK_MODE FLASHBACK_DRY_RUN_PROCESS_COUNT
 }
 
 delete_config() {
@@ -152,6 +154,11 @@ make_flashback_request() {
         echo "ERROR: Application pre-check failed."
         pause
         return
+    fi
+    if [ -f "$APP_INFO_FILE" ]; then
+        # shellcheck disable=SC1090
+        . "$APP_INFO_FILE"
+        export FLASHBACK_RUN_FS FLASHBACK_PATCH_FS FLASHBACK_NE_FS
     fi
 
     echo ""

@@ -11,9 +11,8 @@ INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
 PDB_NAME="${FLASHBACK_PDB_NAME:-$INSTANCE_ID}"
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
 FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
-# Include time in the operational tag so repeated same-day requests do not
-# collide with existing restore-point names.
-DATE_TAG=$(date '+%d%b%y_%H%M%S' | tr '[:lower:]' '[:upper:]')
+# Client runbook format, for example 28APR26.
+DATE_TAG=$(date '+%d%b%y' | tr '[:lower:]' '[:upper:]')
 
 CDB_RP_NAME="${INSTANCE_ID}_CDB_flashback_restore_${DATE_TAG}"
 PDB_RP_NAME="${INSTANCE_ID}_PDB_flashback_restore_${DATE_TAG}"
