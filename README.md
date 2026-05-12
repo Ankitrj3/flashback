@@ -7,7 +7,7 @@ Production-oriented Oracle EBS flashback automation for database restore-point m
 - Views current flashback state:
   restore points, application tar backups, and restore history from the alert log.
 - Creates a flashback request:
-  validates the application state, captures filesystem details, creates CDB and PDB guaranteed restore points, and starts application filesystem backups.
+  validates the application state, captures filesystem details, creates CDB and PDB guaranteed restore points, starts application filesystem backups, and restarts services only when the tool stopped them for the request flow.
 - Restores a flashback point:
   stops application services, restores filesystem backups, flashes back the database, drops restore points, restarts services, and writes a detached restore log.
 - Validates load-test readiness:
@@ -86,6 +86,7 @@ Restore process status is tracked in:
 - SSH access to the application node must work non-interactively for the OS user running the automation.
 - Database flashback requires `ARCHIVELOG` and `FLASHBACK_ON=YES`.
 - Backup and restore actions assume the configured filesystem paths and tar backup directory are correct and writable.
+- In `Make flashback request`, if the tool stops application services for backup safety, it attempts to start them again after the request flow completes and also after later request-flow failures.
 - Restore runs in detached mode and writes progress to a timestamped log under `logs/`.
 
 ## Main Files

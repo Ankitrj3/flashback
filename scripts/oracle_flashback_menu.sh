@@ -12,6 +12,45 @@ pause() {
     read -r -p "Press [Enter] key to continue..." _
 }
 
+reload_app_info() {
+    if [ -f "$APP_INFO_FILE" ]; then
+        # shellcheck disable=SC1090
+        . "$APP_INFO_FILE"
+        export FLASHBACK_RUN_FS FLASHBACK_PATCH_FS FLASHBACK_NE_FS FLASHBACK_APP_STOPPED_BY_TOOL
+    else
+        FLASHBACK_APP_STOPPED_BY_TOOL=false
+    fi
+}
+
+persist_app_info() {
+    {
+        printf 'export FLASHBACK_RUN_FS=%q\n' "${FLASHBACK_RUN_FS:-}"
+        printf 'export FLASHBACK_PATCH_FS=%q\n' "${FLASHBACK_PATCH_FS:-}"
+        printf 'export FLASHBACK_NE_FS=%q\n' "${FLASHBACK_NE_FS:-}"
+        printf 'export FLASHBACK_APP_STOPPED_BY_TOOL=%q\n' "${FLASHBACK_APP_STOPPED_BY_TOOL:-false}"
+    } > "$APP_INFO_FILE"
+    chmod 600 "$APP_INFO_FILE"
+}
+
+restart_app_if_needed() {
+    local reason="$1"
+
+    if [ "${FLASHBACK_APP_STOPPED_BY_TOOL:-false}" != "true" ]; then
+        return 0
+    fi
+
+    echo ""
+    echo "Restarting application services because this request flow stopped them earlier..."
+    if sh "$SCRIPT_DIR/oracle/start_app_services.sh"; then
+        FLASHBACK_APP_STOPPED_BY_TOOL=false
+        persist_app_info
+        return 0
+    fi
+
+    echo "WARNING: Application restart failed after $reason. Manual startup may be required."
+    return 1
+}
+
 marker() {
     local ts
     ts=$(date '+%Y-%m-%d %H:%M:%S')
@@ -158,15 +197,12 @@ make_flashback_request() {
         pause
         return
     fi
-    if [ -f "$APP_INFO_FILE" ]; then
-        # shellcheck disable=SC1090
-        . "$APP_INFO_FILE"
-        export FLASHBACK_RUN_FS FLASHBACK_PATCH_FS FLASHBACK_NE_FS
-    fi
+    reload_app_info
 
     echo ""
     echo "Step 2/3: Creating CDB/PDB guaranteed restore points..."
     if ! sh "$SCRIPT_DIR/oracle/create_flashback_restore_point.sh"; then
+        restart_app_if_needed "restore point creation failure" || true
         echo "ERROR: DB restore point creation failed."
         pause
         return
@@ -175,7 +211,13 @@ make_flashback_request() {
     echo ""
     echo "Step 3/3: Starting application tar backup..."
     if ! sh "$SCRIPT_DIR/oracle/create_backup.sh"; then
+        restart_app_if_needed "application backup failure" || true
         echo "ERROR: Application backup failed."
+        pause
+        return
+    fi
+
+    if ! restart_app_if_needed "successful flashback request completion"; then
         pause
         return
     fi
@@ -293,11 +335,7 @@ restore_flashback() {
         pause
         return
     fi
-    if [ -f "$APP_INFO_FILE" ]; then
-        # shellcheck disable=SC1090
-        . "$APP_INFO_FILE"
-        export FLASHBACK_RUN_FS FLASHBACK_PATCH_FS FLASHBACK_NE_FS
-    fi
+    reload_app_info
 
     show_db_session_report
 

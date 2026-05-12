@@ -31,6 +31,7 @@ BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backup/tar}"
 APP_INFO_FILE="${FLASHBACK_APP_INFO_FILE:-$HOME/.flashback_app_info}"
 STOP_CMD="${FLASHBACK_STOP_CMD:-adstpall.sh}"
 VERIFY_DB_SESSIONS="${FLASHBACK_VERIFY_DB_SESSIONS:-true}"
+APP_STOPPED_BY_TOOL=false
 
 run_app_cmd() {
     cmd="$1"
@@ -110,6 +111,7 @@ write_app_info_file() {
         printf 'export FLASHBACK_RUN_FS=%s\n' "'$RUN_FS'"
         printf 'export FLASHBACK_PATCH_FS=%s\n' "'$PATCH_FS'"
         printf 'export FLASHBACK_NE_FS=%s\n' "'$NE_FS'"
+        printf 'export FLASHBACK_APP_STOPPED_BY_TOOL=%s\n' "'$APP_STOPPED_BY_TOOL'"
     } > "$APP_INFO_FILE"
     chmod 600 "$APP_INFO_FILE"
 }
@@ -186,6 +188,7 @@ if [ "$proc_count" -gt 2 ]; then
             log "ERROR: Application processes are still running after shutdown attempt."
             exit 1
         else
+            APP_STOPPED_BY_TOOL=true
             log "Application services are down. Backup can proceed."
         fi
     fi
