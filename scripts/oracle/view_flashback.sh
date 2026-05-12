@@ -5,8 +5,17 @@
 
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execution.log}"
+
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [view_flashback] $*"
+    echo "$*"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] [view_flashback] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+}
+
+marker() {
+    log "[$1] $2 : $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
@@ -39,7 +48,7 @@ show_restore_points() {
     echo "=========================================="
     echo "1.1 DB Guaranteed Restore Points"
     echo "=========================================="
-    sh "$(dirname "$0")/list_restore_points.sh"
+    sh "$SCRIPT_DIR/list_restore_points.sh"
 }
 
 show_app_tars() {
@@ -47,10 +56,12 @@ show_app_tars() {
     echo "=========================================="
     echo "1.1 Application Tar Files"
     echo "=========================================="
+    marker "START" "List application tar files"
     log "Listing: ${BACKUP_DIR}/${INSTANCE_ID}*.tar"
     if ! run_remote_or_local "ls -lrt '${BACKUP_DIR}/${INSTANCE_ID}'*.tar 2>/dev/null"; then
         log "No matching tar files found or app host is not reachable."
     fi
+    marker "END" "List application tar files"
 }
 
 detect_alert_log() {
@@ -78,23 +89,27 @@ show_restore_history() {
     echo "1.2 Flashback Restore History"
     echo "=========================================="
 
+    marker "START" "Search alert log history"
     source_oracle_env
     alert_file="$(detect_alert_log || true)"
     if [ -z "$alert_file" ]; then
         log "Alert log path not configured and could not be auto-detected."
         log "Set FLASHBACK_ALERT_LOG=/path/to/alert_DBNAME1.log"
+        marker "END" "Search alert log history"
         return
     fi
 
     log "Searching alert log: $alert_file"
     if [ ! -f "$alert_file" ]; then
         log "Alert log file not found: $alert_file"
+        marker "END" "Search alert log history"
         return
     fi
 
     matches=$(grep -iin -B1 "Flashback restore" "$alert_file" || true)
     if [ -z "$matches" ]; then
         log "No 'Flashback restore' entries found."
+        marker "END" "Search alert log history"
         return
     fi
 
@@ -125,6 +140,7 @@ show_restore_history() {
     echo ""
     log "Raw matching alert log context:"
     echo "$matches"
+    marker "END" "Search alert log history"
 }
 
 show_restore_points

@@ -4,12 +4,13 @@
 
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execution.log}"
+
 log() {
-    if [ "${FLASHBACK_LOG_TIMESTAMPS:-true}" = "true" ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [stop_app_services] $*"
-    else
-        echo "[stop_app_services] $*"
-    fi
+    echo "$*"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] [stop_app_services] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
@@ -36,7 +37,7 @@ count_app_processes() {
         echo "${FLASHBACK_DRY_RUN_PROCESS_COUNT:-0}"
         return 0
     fi
-    run_app_cmd "ps -ef | grep -E '(FNDLIBR|opmn|httpd|java.*oacore|java.*forms|adcmctl)' | grep -v grep | wc -l" 2>/dev/null | tr -d ' '
+    run_app_cmd "ps -ef | egrep \"FND|INV|frm|java|http|aporx\" | egrep -v \"bash|ssh|ps|grep\" | wc -l" 2>/dev/null | tr -d ' '
 }
 
 normalize_count() {

@@ -3,8 +3,17 @@
 
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execution.log}"
+
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [list_restore_points] $*" >&2
+    echo "$*" >&2
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] [list_restore_points] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+}
+
+marker() {
+    log "[$1] $2 : $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
@@ -28,7 +37,7 @@ else
     CONNECT_CMD="${FLASHBACK_DB_USER:-sys}/${FLASHBACK_DB_PASS:-}@${FLASHBACK_DB_HOST:-}:${FLASHBACK_DB_PORT:-1521}/${FLASHBACK_DB_SERVICE:-} as sysdba"
 fi
 
-log "Querying V\$RESTORE_POINT from Oracle ..."
+marker "START" "Query V\$RESTORE_POINT"
 
 sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
@@ -45,5 +54,5 @@ ORDER BY TIME;
 EXIT;
 EOF
 
-log "Query complete."
+marker "END" "Query V\$RESTORE_POINT"
 exit 0

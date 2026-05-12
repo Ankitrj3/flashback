@@ -6,6 +6,7 @@ ENV_FILE="$HOME/.flashback_env"
 APP_INFO_FILE="$HOME/.flashback_app_info"
 RESTORE_PID_FILE="$HOME/.flashback_restore_pid"
 REQUESTED_FLASHBACK_MODE="${FLASHBACK_MODE:-}"
+FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../logs/flashback_execution.log}"
 
 pause() {
     echo ""
@@ -68,7 +69,9 @@ load_or_prompt_config() {
         FLASHBACK_SSH_USER="${FLASHBACK_SSH_USER:-$(whoami)}"
     fi
     if [ -z "${FLASHBACK_APP_BASE_DIR:-}" ]; then
-        read -r -p "Enter application base dir (example: /db800/app/oracle/r122${FLASHBACK_INSTANCE_ID}): " FLASHBACK_APP_BASE_DIR
+        default_app_base="/db800/app/oracle/r122${FLASHBACK_INSTANCE_ID}"
+        read -r -p "Enter application base dir (default: ${default_app_base}): " FLASHBACK_APP_BASE_DIR
+        FLASHBACK_APP_BASE_DIR="${FLASHBACK_APP_BASE_DIR:-$default_app_base}"
     fi
     if [ -z "${FLASHBACK_BACKUP_DIR:-}" ]; then
         read -r -p "Enter app tar backup dir (default: /iriscommon/backup/tar): " FLASHBACK_BACKUP_DIR
@@ -101,12 +104,14 @@ load_or_prompt_config() {
         printf 'export FLASHBACK_START_CMD=%q\n' "$FLASHBACK_START_CMD"
         printf 'export FLASHBACK_MODE=%q\n' "$FLASHBACK_MODE"
         printf 'export FLASHBACK_DRY_RUN_PROCESS_COUNT=%q\n' "$FLASHBACK_DRY_RUN_PROCESS_COUNT"
+        printf 'export FLASHBACK_LOG_FILE=%q\n' "$FLASHBACK_LOG_FILE"
     } > "$ENV_FILE"
     chmod 600 "$ENV_FILE"
 
     export FLASHBACK_INSTANCE_ID FLASHBACK_PDB_NAME FLASHBACK_ORACLE_ENV FLASHBACK_DB_HOST
     export FLASHBACK_APP_HOST FLASHBACK_SSH_USER FLASHBACK_APP_BASE_DIR FLASHBACK_BACKUP_DIR
     export FLASHBACK_ALERT_LOG FLASHBACK_APP_INFO_FILE FLASHBACK_APPS_USER FLASHBACK_APPS_PASS FLASHBACK_WLS_PASS FLASHBACK_START_CMD FLASHBACK_MODE FLASHBACK_DRY_RUN_PROCESS_COUNT
+    export FLASHBACK_LOG_FILE
 }
 
 delete_config() {
@@ -152,6 +157,10 @@ make_flashback_request() {
     fi
 
     echo ""
+    read -r -p "Enter optional restore point suffix/name, blank for date default: " FLASHBACK_RESTORE_SUFFIX
+    export FLASHBACK_RESTORE_SUFFIX
+
+    echo ""
     echo "Step 1/3: Capturing application file-system and service status..."
     if ! sh "$SCRIPT_DIR/oracle/capture_app_info.sh"; then
         echo "ERROR: Application pre-check failed."
@@ -185,6 +194,95 @@ make_flashback_request() {
     pause
 }
 
+show_db_session_report() {
+    echo ""
+    echo "=========================================="
+    echo "       DB APPLICATION SESSION CHECK       "
+    echo "=========================================="
+
+    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
+        echo "DRY-RUN: Would display gv\$session counts for non-background programs."
+        echo "DRY-RUN: SQL 1: select count(*),program,module,inst_id from gv\$session where program not like 'oracle@%' group by program,module,inst_id order by count(*);"
+        echo "DRY-RUN: SQL 2: select count(*),status from gv\$session where program not like 'oracle@%' group by status;"
+        return 0
+    fi
+
+    if [ -n "${FLASHBACK_ORACLE_ENV:-}" ] && [ -f "$FLASHBACK_ORACLE_ENV" ]; then
+        # shellcheck disable=SC1090
+        . "$FLASHBACK_ORACLE_ENV"
+    fi
+
+    if ! command -v sqlplus >/dev/null 2>&1; then
+        echo "WARNING: sqlplus not found. DB session report cannot be displayed."
+        return 0
+    fi
+
+    sqlplus -S "/ as sysdba" <<'EOF'
+SET PAGES 220 LINES 220 TRIMSPOOL ON
+COL PROGRAM FOR A45
+COL MODULE FOR A45
+PROMPT
+PROMPT Non-background session counts by program/module/instance:
+SELECT COUNT(*) SESSION_COUNT, PROGRAM, MODULE, INST_ID
+FROM GV$SESSION
+WHERE PROGRAM NOT LIKE 'oracle@%'
+GROUP BY PROGRAM, MODULE, INST_ID
+ORDER BY COUNT(*);
+PROMPT
+PROMPT Non-background session counts by status:
+SELECT COUNT(*) SESSION_COUNT, STATUS
+FROM GV$SESSION
+WHERE PROGRAM NOT LIKE 'oracle@%'
+GROUP BY STATUS;
+EXIT;
+EOF
+}
+
+run_app_list_cmd() {
+    local cmd="$1"
+    if [ -n "${FLASHBACK_APP_HOST:-}" ]; then
+        ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no "$FLASHBACK_SSH_USER@$FLASHBACK_APP_HOST" "$cmd"
+    else
+        sh -c "$cmd"
+    fi
+}
+
+choose_restore_backup_date_tag() {
+    echo ""
+    echo "=========================================="
+    echo "       APPLICATION BACKUP TAR FILES       "
+    echo "=========================================="
+
+    local tar_list=""
+    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
+        local sample_tag
+        sample_tag=$(date '+%d%b%y')
+        echo "DRY-RUN: Would list ${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_*_backup_*.tar on application node."
+        echo "${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_fs_ne_backup_${sample_tag}.tar"
+        echo "${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_fs1_Patch_backup_${sample_tag}.tar"
+        echo "${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_fs2_Run_backup_${sample_tag}.tar"
+        tar_list="${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_fs_ne_backup_${sample_tag}.tar"
+    else
+        tar_list=$(run_app_list_cmd "ls -1t '${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}'_*_backup_*.tar 2>/dev/null" || true)
+        if [ -z "$tar_list" ]; then
+            echo "ERROR: No application backup tar files found in $FLASHBACK_BACKUP_DIR."
+            return 1
+        fi
+        echo "$tar_list"
+    fi
+
+    echo ""
+    echo "Available backup date tags:"
+    echo "$tar_list" | sed 's/.*_backup_//;s/\.tar$//' | awk 'NF && !seen[$0]++ { printf "  %s\n", $0 }'
+    echo ""
+
+    local latest_tag
+    latest_tag=$(echo "$tar_list" | sed 's/.*_backup_//;s/\.tar$//' | awk 'NF { print; exit }')
+    read -r -p "Enter application backup date tag to restore [$latest_tag]: " FLASHBACK_RESTORE_DATE_TAG
+    FLASHBACK_RESTORE_DATE_TAG="${FLASHBACK_RESTORE_DATE_TAG:-$latest_tag}"
+    export FLASHBACK_RESTORE_DATE_TAG
+}
+
 restore_flashback() {
     clear
     echo "=========================================="
@@ -214,6 +312,21 @@ restore_flashback() {
         pause
         return
     fi
+
+    echo ""
+    echo "Step 1: Stopping application services before restore..."
+    if ! sh "$SCRIPT_DIR/oracle/stop_app_services.sh"; then
+        echo "ERROR: Application service shutdown failed."
+        pause
+        return
+    fi
+    if [ -f "$APP_INFO_FILE" ]; then
+        # shellcheck disable=SC1090
+        . "$APP_INFO_FILE"
+        export FLASHBACK_RUN_FS FLASHBACK_PATCH_FS FLASHBACK_NE_FS
+    fi
+
+    show_db_session_report
 
     # --- Collect restore point names interactively (foreground) ---
     echo ""
@@ -292,7 +405,7 @@ EOF
         fi
 
         local DATE_TAG_DEFAULT
-        DATE_TAG_DEFAULT=$(date '+%d%b%y' | tr '[:lower:]' '[:upper:]')
+        DATE_TAG_DEFAULT=$(date '+%d%b%y')
         local CDB_RP_DEFAULT="${FLASHBACK_INSTANCE_ID}_CDB_flashback_restore_${DATE_TAG_DEFAULT}"
         local PDB_RP_DEFAULT="${FLASHBACK_INSTANCE_ID}_PDB_flashback_restore_${DATE_TAG_DEFAULT}"
 
@@ -301,6 +414,11 @@ EOF
 
         read -r -p "Enter PDB restore point name [$PDB_RP_DEFAULT]: " PDB_RP_NAME
         PDB_RP_NAME="${PDB_RP_NAME:-$PDB_RP_DEFAULT}"
+    fi
+
+    if ! choose_restore_backup_date_tag; then
+        pause
+        return
     fi
 
     # --- Prepare log file ---
@@ -315,6 +433,15 @@ EOF
     echo "  Restore points confirmed:"
     echo "    CDB: $CDB_RP_NAME"
     echo "    PDB: $PDB_RP_NAME"
+    echo "    App backup date tag: $FLASHBACK_RESTORE_DATE_TAG"
+    echo ""
+    read -r -p "Final confirmation: type RESTORE to launch detached restore: " final_confirm
+    if [ "$final_confirm" != "RESTORE" ]; then
+        echo "Cancelled."
+        pause
+        return
+    fi
+
     echo ""
     echo "  Launching restore in detached mode..."
     echo "  Log file: $LOG_FILE"
@@ -323,6 +450,8 @@ EOF
     # --- Launch detached ---
     export FLASHBACK_CDB_RESTORE_POINT="$CDB_RP_NAME"
     export FLASHBACK_PDB_RESTORE_POINT="$PDB_RP_NAME"
+    export FLASHBACK_RESTORE_DATE_TAG
+    export FLASHBACK_SKIP_APP_STOP=true
 
     nohup sh "$SCRIPT_DIR/oracle/restore_flashback.sh" > "$LOG_FILE" 2>&1 &
     local RESTORE_PID=$!
@@ -390,16 +519,32 @@ view_restore_status() {
     pause
 }
 
-not_in_scope_yet() {
+validate_load_test_ready() {
     clear
     echo "=========================================="
-    echo "              NEXT PHASE                  "
+    echo "      VALIDATE LOAD TEST READINESS        "
     echo "=========================================="
-    echo "This option is intentionally not active yet."
-    echo "Current active scope is:"
-    echo "  1. View Flashback"
-    echo "  2. Make flashback request"
-    echo "  3. Restore flashback"
+    echo "This will validate application, database, filesystem, and alert-log readiness for load testing."
+    echo "Execution mode: ${FLASHBACK_MODE:-dry-run}"
+    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
+        echo "Dry-run mode shows the validations that would run."
+        echo "Run with FLASHBACK_MODE=real for live validation."
+    fi
+    echo ""
+    read -r -p "Continue with Load Test Readiness Validation? Type YES: " confirm
+    if [ "$confirm" != "YES" ]; then
+        echo "Cancelled."
+        pause
+        return
+    fi
+
+    if ! sh "$SCRIPT_DIR/oracle/validate_load_test_ready.sh"; then
+        echo ""
+        echo "ERROR: System is not ready for load test. Review failures above."
+        pause
+        return
+    fi
+
     pause
 }
 
@@ -445,7 +590,7 @@ while true; do
     echo "1. View Flashback"
     echo "2. Make flashback request"
     echo "3. Restore flashback"
-    echo "4. Validate system ready for Load test (next phase)"
+    echo "4. Validate system ready for Load test"
     echo "5. Exit"
     echo "6. Delete stored config"
     echo "7. Change execution mode (${FLASHBACK_MODE:-dry-run})"
@@ -457,7 +602,7 @@ while true; do
         1) view_flashback ;;
         2) make_flashback_request ;;
         3) restore_flashback ;;
-        4) not_in_scope_yet ;;
+        4) validate_load_test_ready ;;
         5) echo "Exiting..."; exit 0 ;;
         6) delete_config; load_or_prompt_config ;;
         7) toggle_mode ;;

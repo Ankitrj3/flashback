@@ -3,19 +3,30 @@
 
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execution.log}"
+
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [create_flashback] $*"
+    echo "$*"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] [create_flashback] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
 PDB_NAME="${FLASHBACK_PDB_NAME:-$INSTANCE_ID}"
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
 FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
-# Client runbook format, for example 28APR26.
-DATE_TAG=$(date '+%d%b%y' | tr '[:lower:]' '[:upper:]')
+RESTORE_SUFFIX="${FLASHBACK_RESTORE_SUFFIX:-}"
+# Client runbook format, preserving the date command's natural month case.
+DATE_TAG=$(date '+%d%b%y')
 
-CDB_RP_NAME="${INSTANCE_ID}_CDB_flashback_restore_${DATE_TAG}"
-PDB_RP_NAME="${INSTANCE_ID}_PDB_flashback_restore_${DATE_TAG}"
+if [ -n "$RESTORE_SUFFIX" ]; then
+    CDB_RP_NAME="${INSTANCE_ID}_CDB_${RESTORE_SUFFIX}"
+    PDB_RP_NAME="${INSTANCE_ID}_PDB_${RESTORE_SUFFIX}"
+else
+    CDB_RP_NAME="${INSTANCE_ID}_CDB_flashback_restore_${DATE_TAG}"
+    PDB_RP_NAME="${INSTANCE_ID}_PDB_flashback_restore_${DATE_TAG}"
+fi
 
 if [ -n "$ORACLE_ENV" ] && [ -f "$ORACLE_ENV" ]; then
     log "Sourcing Oracle environment: $ORACLE_ENV"

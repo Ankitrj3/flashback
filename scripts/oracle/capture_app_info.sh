@@ -4,8 +4,13 @@
 
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execution.log}"
+
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [capture_app_info] $*"
+    echo "$*"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] [capture_app_info] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
@@ -35,7 +40,7 @@ count_app_processes() {
         echo "${FLASHBACK_DRY_RUN_PROCESS_COUNT:-0}"
         return 0
     fi
-    run_app_cmd "ps -ef | grep -E '(FNDLIBR|opmn|httpd|java.*oacore|java.*forms|adcmctl)' | grep -v grep | wc -l" 2>/dev/null | tr -d ' '
+    run_app_cmd "ps -ef | egrep \"FND|INV|frm|java|http|aporx\" | egrep -v \"bash|ssh|ps|grep\" | wc -l" 2>/dev/null | tr -d ' '
 }
 
 normalize_count() {
@@ -50,10 +55,6 @@ normalize_count() {
 }
 
 print_file_systems() {
-    RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-    PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-    NE_FS="$APP_BASE_DIR/fs_ne"
-
     echo ""
     log "Application File Systems"
     log "  RUN File System           : $RUN_FS"
@@ -61,6 +62,48 @@ print_file_systems() {
     log "  Non-Editioned File System : $NE_FS"
     echo ""
     log "Backup target directory     : $BACKUP_DIR"
+}
+
+detect_file_system_roles() {
+    RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+    PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+    NE_FS="$APP_BASE_DIR/fs_ne"
+
+    if [ "$FLASHBACK_MODE" != "real" ]; then
+        log "DRY-RUN: Would detect RUN/PATCH roles from s_file_edition_type in context XML."
+        return 0
+    fi
+
+    role_output=$(run_app_cmd "for fs in fs1 fs2; do xml=\$(ls -1 '$APP_BASE_DIR'/\$fs/inst/apps/*/appl/admin/*.xml 2>/dev/null | head -1); if [ -n \"\$xml\" ]; then edition=\$(sed -n 's/.*<[^>]*s_file_edition_type[^>]*>\([^<]*\)<.*/\1/p' \"\$xml\" | head -1 | tr '[:upper:]' '[:lower:]'); echo \"\$fs=\$edition\"; fi; done" 2>/dev/null || true)
+
+    fs1_role=""
+    fs2_role=""
+    while IFS='=' read -r fs role; do
+        case "$fs:$role" in
+            fs1:run) fs1_role="run" ;;
+            fs1:patch) fs1_role="patch" ;;
+            fs2:run) fs2_role="run" ;;
+            fs2:patch) fs2_role="patch" ;;
+        esac
+    done <<EOF
+$role_output
+EOF
+
+    if [ "$fs1_role" = "run" ]; then
+        RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+        PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+    elif [ "$fs2_role" = "run" ]; then
+        RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+        PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+    elif [ "$fs1_role" = "patch" ]; then
+        RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+        PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+    elif [ "$fs2_role" = "patch" ]; then
+        RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+        PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+    else
+        log "WARNING: Could not detect RUN/PATCH roles from context XML; using existing fs2 RUN/fs1 PATCH default."
+    fi
 }
 
 write_app_info_file() {
@@ -75,10 +118,6 @@ write_app_info_file() {
 }
 
 verify_file_systems() {
-    RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-    PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-    NE_FS="$APP_BASE_DIR/fs_ne"
-
     if [ "$FLASHBACK_MODE" != "real" ]; then
         log "DRY-RUN: Would verify application paths on app server:"
         log "DRY-RUN:   test -d '$RUN_FS'"
@@ -95,8 +134,6 @@ verify_file_systems() {
     fi
     log "Verified application filesystem paths on app server."
 }
-
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 run_stop_app_services() {
     sh "$SCRIPT_DIR/stop_app_services.sh"
@@ -136,10 +173,6 @@ EOF
     fi
 }
 
-print_file_systems
-verify_file_systems
-write_app_info_file
-
 if [ -n "$APP_HOST" ]; then
     log "Application host             : $SSH_USER@$APP_HOST"
 else
@@ -149,40 +182,38 @@ fi
 proc_count=$(normalize_count "$(count_app_processes || echo "999")")
 log "Application process count    : $proc_count"
 
-if [ "$proc_count" -gt 0 ]; then
+if [ "$proc_count" -gt 2 ]; then
     echo ""
-    echo "Application services are running."
-    printf "Continue and take application backup while services are running? (yes/no): "
+    printf "%s application-related processes are still running. Do you want to continue backup while services are running? (yes/no): " "$proc_count"
     read -r continue_choice
     if [ "$continue_choice" = "yes" ]; then
         log "Operator approved backup while application services are running."
-        check_db_app_sessions
-        exit 0
-    fi
+    else
+        printf "Do you want to stop application services first? (yes/no): "
+        read -r shutdown_choice
+        if [ "$shutdown_choice" != "yes" ]; then
+            log "Cancelled. Operator did not approve running backup or shutdown."
+            exit 3
+        fi
 
-    printf "Shutdown application services before backup? (yes/no): "
-    read -r shutdown_choice
-    if [ "$shutdown_choice" != "yes" ]; then
-        log "Cancelled. Operator did not approve running backup or shutdown."
-        exit 3
+        if [ "$FLASHBACK_MODE" != "real" ]; then
+            log "DRY-RUN: Would run application shutdown using $STOP_CMD."
+            log "DRY-RUN: Would wait until application process count becomes zero."
+        elif ! run_stop_app_services; then
+            log "ERROR: Application processes are still running after shutdown attempt."
+            exit 1
+        else
+            log "Application services are down. Backup can proceed."
+        fi
     fi
-
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        log "DRY-RUN: Would run application shutdown using $STOP_CMD."
-        log "DRY-RUN: Would wait until application process count becomes zero."
-        check_db_app_sessions
-        exit 0
-    fi
-
-    if ! run_stop_app_services; then
-        log "ERROR: Application processes are still running after shutdown attempt."
-        exit 1
-    fi
-    check_db_app_sessions
-    log "Application services are down. Backup can proceed."
 else
-    log "No application services detected. Backup can proceed."
-    check_db_app_sessions
+    log "Application process count is within threshold. Backup can proceed."
 fi
+
+detect_file_system_roles
+print_file_systems
+verify_file_systems
+write_app_info_file
+check_db_app_sessions
 
 exit 0

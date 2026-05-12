@@ -3,13 +3,18 @@
 
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execution.log}"
+
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [create_backup] $*"
+    echo "$*"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[%s] [create_backup] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
-# Client runbook format, for example 09dec25.
-DATE_TAG=$(date '+%d%b%y' | tr '[:upper:]' '[:lower:]')
+# Client runbook format, preserving the date command's natural month case.
+DATE_TAG=$(date '+%d%b%y')
 APP_BASE_DIR="${FLASHBACK_APP_BASE_DIR:-/db800/app/oracle/r122${INSTANCE_ID}}"
 BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backup/tar}"
 FS_LIST="${FLASHBACK_FS_LIST:-fs_ne fs1 fs2}"
@@ -32,15 +37,24 @@ log "Mode         : $FLASHBACK_MODE"
 fs_label() {
     case "$1" in
         fs_ne) echo "fs_ne" ;;
-        fs1) echo "fs1_Patch" ;;
-        fs2) echo "fs2_Run" ;;
+        fs1)
+            case "${FLASHBACK_RUN_FS:-}" in
+                */fs1/*) echo "fs1_Run" ;;
+                *) echo "fs1_Patch" ;;
+            esac
+            ;;
+        fs2)
+            case "${FLASHBACK_RUN_FS:-}" in
+                */fs1/*) echo "fs2_Patch" ;;
+                *) echo "fs2_Run" ;;
+            esac
+            ;;
         *) echo "$1" ;;
     esac
 }
 
 run_backup_on_node() {
     node="$1"
-    pids=""
 
     # In real mode, fail before launching background tar jobs if the backup
     # target is missing or unwritable. This keeps partial backups obvious.
@@ -76,16 +90,17 @@ run_backup_on_node() {
             log "Launching local: nohup tar -cvf $archive $fs &"
             (
                 cd "$APP_BASE_DIR" || exit 1
-                nohup tar -cvf "$archive" "$fs" > "$log_file" 2>&1
+                nohup tar -cvf "$archive" "$fs" > "$log_file" 2>&1 </dev/null &
             ) &
-            pids="$pids $!"
         else
             log "Launching remote on $node: nohup tar -cvf $archive $fs &"
             # shellcheck disable=SC2086
             ssh $ssh_opts "$SSH_USER@$node" \
-                "cd '$APP_BASE_DIR' && nohup tar -cvf '$archive' '$fs' > '$log_file' 2>&1" &
-            pids="$pids $!"
+                "cd '$APP_BASE_DIR' && nohup tar -cvf '$archive' '$fs' > '$log_file' 2>&1 </dev/null &"
         fi
+
+        log "Backup started: $archive"
+        log "Backup log    : $log_file"
     done
 
     if [ "$FLASHBACK_MODE" != "real" ]; then
@@ -93,30 +108,7 @@ run_backup_on_node() {
         return 0
     fi
 
-    log "Waiting for all tar processes to complete..."
-    failed=0
-    for pid in $pids; do
-        if ! wait "$pid"; then
-            log "ERROR: A tar process failed. pid=$pid"
-            failed=$((failed + 1))
-        fi
-    done
-
-    if [ "$failed" -gt 0 ]; then
-        log "ERROR: $failed backup job(s) failed on node '${node:-local}'."
-        return 1
-    fi
-
-    for fs in $FS_LIST; do
-        label=$(fs_label "$fs")
-        archive="${BACKUP_DIR}/${INSTANCE_ID}_${label}_backup_${DATE_TAG}.tar"
-        if [ -z "$node" ]; then
-            size=$(du -sh "$archive" 2>/dev/null | cut -f1 || echo "?")
-            log "Done: $archive ($size)"
-        else
-            log "Done: $SSH_USER@$node:$archive"
-        fi
-    done
+    log "Backup commands were detached successfully for node '${node:-local}'."
 }
 
 overall_failed=0
@@ -148,5 +140,5 @@ if [ "$overall_failed" -gt 0 ]; then
     exit 1
 fi
 
-log "All filesystem backups completed successfully."
+log "All filesystem backup jobs were started successfully."
 exit 0
