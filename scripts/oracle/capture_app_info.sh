@@ -96,54 +96,10 @@ verify_file_systems() {
     log "Verified application filesystem paths on app server."
 }
 
-stop_app_services() {
-    if [ -z "$APPS_PASS" ]; then
-        printf "Enter APPS username (default: %s): " "$APPS_USER"
-        read -r entered_apps_user
-        APPS_USER="${entered_apps_user:-$APPS_USER}"
-        printf "Enter APPS password: "
-        stty -echo 2>/dev/null || true
-        read -r APPS_PASS
-        stty echo 2>/dev/null || true
-        echo ""
-    fi
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
-    if [ -z "$WLS_PASS" ]; then
-        printf "Enter WebLogic password: "
-        stty -echo 2>/dev/null || true
-        read -r WLS_PASS
-        stty echo 2>/dev/null || true
-        echo ""
-    fi
-
-    log "Searching for $STOP_CMD under $APP_BASE_DIR ..."
-    stop_path=$(run_app_cmd "command -v '$STOP_CMD' 2>/dev/null || find '$APP_BASE_DIR' -name '$STOP_CMD' 2>/dev/null | head -1" || true)
-    if [ -z "$stop_path" ]; then
-        log "ERROR: $STOP_CMD not found on application host."
-        return 1
-    fi
-
-    log "Stopping application services using: $stop_path"
-    if [ -n "$APP_HOST" ]; then
-        printf "%s\n%s\n%s\n" "$APPS_USER" "$APPS_PASS" "$WLS_PASS" |
-            ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no "$SSH_USER@$APP_HOST" "sh '$stop_path'"
-    else
-        printf "%s\n%s\n%s\n" "$APPS_USER" "$APPS_PASS" "$WLS_PASS" | sh "$stop_path"
-    fi
-}
-
-wait_for_processes_down() {
-    tries=10
-    while [ "$tries" -gt 0 ]; do
-        remaining=$(normalize_count "$(count_app_processes || echo "999")")
-        log "Remaining application process count: $remaining"
-        if [ "$remaining" -eq 0 ]; then
-            return 0
-        fi
-        tries=$((tries - 1))
-        sleep 15
-    done
-    return 1
+run_stop_app_services() {
+    sh "$SCRIPT_DIR/stop_app_services.sh"
 }
 
 check_db_app_sessions() {
@@ -218,8 +174,7 @@ if [ "$proc_count" -gt 0 ]; then
         exit 0
     fi
 
-    stop_app_services
-    if ! wait_for_processes_down; then
+    if ! run_stop_app_services; then
         log "ERROR: Application processes are still running after shutdown attempt."
         exit 1
     fi

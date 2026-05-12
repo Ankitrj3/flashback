@@ -4,6 +4,7 @@ set -u
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ENV_FILE="$HOME/.flashback_env"
 APP_INFO_FILE="$HOME/.flashback_app_info"
+RESTORE_PID_FILE="$HOME/.flashback_restore_pid"
 REQUESTED_FLASHBACK_MODE="${FLASHBACK_MODE:-}"
 
 pause() {
@@ -76,6 +77,7 @@ load_or_prompt_config() {
     FLASHBACK_APPS_USER="${FLASHBACK_APPS_USER:-apps}"
     FLASHBACK_APPS_PASS="${FLASHBACK_APPS_PASS:-}"
     FLASHBACK_WLS_PASS="${FLASHBACK_WLS_PASS:-}"
+    FLASHBACK_START_CMD="${FLASHBACK_START_CMD:-adstrtal.sh}"
     FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
     FLASHBACK_DRY_RUN_PROCESS_COUNT="${FLASHBACK_DRY_RUN_PROCESS_COUNT:-0}"
     if [ "$FLASHBACK_MODE" != "dry-run" ] && [ "$FLASHBACK_MODE" != "real" ]; then
@@ -96,6 +98,7 @@ load_or_prompt_config() {
         printf 'export FLASHBACK_APPS_USER=%q\n' "$FLASHBACK_APPS_USER"
         printf 'export FLASHBACK_APPS_PASS=%q\n' "$FLASHBACK_APPS_PASS"
         printf 'export FLASHBACK_WLS_PASS=%q\n' "$FLASHBACK_WLS_PASS"
+        printf 'export FLASHBACK_START_CMD=%q\n' "$FLASHBACK_START_CMD"
         printf 'export FLASHBACK_MODE=%q\n' "$FLASHBACK_MODE"
         printf 'export FLASHBACK_DRY_RUN_PROCESS_COUNT=%q\n' "$FLASHBACK_DRY_RUN_PROCESS_COUNT"
     } > "$ENV_FILE"
@@ -103,7 +106,7 @@ load_or_prompt_config() {
 
     export FLASHBACK_INSTANCE_ID FLASHBACK_PDB_NAME FLASHBACK_ORACLE_ENV FLASHBACK_DB_HOST
     export FLASHBACK_APP_HOST FLASHBACK_SSH_USER FLASHBACK_APP_BASE_DIR FLASHBACK_BACKUP_DIR
-    export FLASHBACK_ALERT_LOG FLASHBACK_APP_INFO_FILE FLASHBACK_APPS_USER FLASHBACK_APPS_PASS FLASHBACK_WLS_PASS FLASHBACK_MODE FLASHBACK_DRY_RUN_PROCESS_COUNT
+    export FLASHBACK_ALERT_LOG FLASHBACK_APP_INFO_FILE FLASHBACK_APPS_USER FLASHBACK_APPS_PASS FLASHBACK_WLS_PASS FLASHBACK_START_CMD FLASHBACK_MODE FLASHBACK_DRY_RUN_PROCESS_COUNT
 }
 
 delete_config() {
@@ -182,6 +185,211 @@ make_flashback_request() {
     pause
 }
 
+restore_flashback() {
+    clear
+    echo "=========================================="
+    echo "           RESTORE FLASHBACK              "
+    echo "=========================================="
+    echo "This will RESTORE the database and application filesystems to a previous flashback point."
+    echo ""
+    echo "WARNING: This is a DESTRUCTIVE operation."
+    echo "  - Application services will be stopped"
+    echo "  - Filesystem content will be overwritten from tar backups"
+    echo "  - Database will be flashed back to the selected restore point"
+    echo "  - Restore points will be dropped after successful flashback"
+    echo "  - Application services will be restarted"
+    echo ""
+    echo "The restore runs DETACHED — your terminal will be freed immediately."
+    echo "All output is written to a log file you can tail at any time."
+    echo ""
+    echo "Execution mode: ${FLASHBACK_MODE:-dry-run}"
+    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
+        echo "Dry-run mode prints the actions and commands without changing DB or filesystems."
+        echo "Run with FLASHBACK_MODE=real for live execution."
+    fi
+    echo ""
+    read -r -p "Continue with Restore Flashback? Type YES: " confirm
+    if [ "$confirm" != "YES" ]; then
+        echo "Cancelled."
+        pause
+        return
+    fi
+
+    # --- Collect restore point names interactively (foreground) ---
+    echo ""
+    echo "Querying available restore points..."
+    echo ""
+
+    # Try to get a parseable list of restore point names from Oracle.
+    local rp_raw=""
+    if command -v sqlplus >/dev/null 2>&1; then
+        local DB_AUTH="${FLASHBACK_DB_AUTH:-os}"
+        local CONNECT_CMD
+        if [ "$DB_AUTH" = "os" ]; then
+            CONNECT_CMD="/ as sysdba"
+        else
+            CONNECT_CMD="${FLASHBACK_DB_USER:-sys}/${FLASHBACK_DB_PASS:-}@${FLASHBACK_DB_HOST:-}:${FLASHBACK_DB_PORT:-1521}/${FLASHBACK_DB_SERVICE:-} as sysdba"
+        fi
+        rp_raw=$(sqlplus -S /nolog <<EOF 2>/dev/null || true
+CONNECT $CONNECT_CMD
+SET HEAD OFF FEED OFF PAGES 0 LINES 500 TRIMSPOOL ON
+SELECT NAME FROM V\$RESTORE_POINT ORDER BY TIME;
+EXIT;
+EOF
+        )
+    fi
+
+    # Build an array of restore point names (skip blank lines).
+    local rp_names=()
+    if [ -n "$rp_raw" ]; then
+        while IFS= read -r line; do
+            line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [ -z "$line" ] && continue
+            rp_names+=("$line")
+        done <<< "$rp_raw"
+    fi
+
+    local CDB_RP_NAME=""
+    local PDB_RP_NAME=""
+
+    if [ "${#rp_names[@]}" -gt 0 ]; then
+        # --- Numbered list selection ---
+        echo "Available restore points:"
+        echo ""
+        local i=1
+        for name in "${rp_names[@]}"; do
+            printf "  %2d. %s\n" "$i" "$name"
+            i=$((i + 1))
+        done
+        echo ""
+
+        read -r -p "Select CDB restore point number: " cdb_num
+        if [ -n "$cdb_num" ] && [ "$cdb_num" -ge 1 ] 2>/dev/null && [ "$cdb_num" -le "${#rp_names[@]}" ] 2>/dev/null; then
+            CDB_RP_NAME="${rp_names[$((cdb_num - 1))]}"
+        else
+            echo "Invalid selection."
+            pause
+            return
+        fi
+
+        read -r -p "Select PDB restore point number: " pdb_num
+        if [ -n "$pdb_num" ] && [ "$pdb_num" -ge 1 ] 2>/dev/null && [ "$pdb_num" -le "${#rp_names[@]}" ] 2>/dev/null; then
+            PDB_RP_NAME="${rp_names[$((pdb_num - 1))]}"
+        else
+            echo "Invalid selection."
+            pause
+            return
+        fi
+    else
+        # --- Fallback: no sqlplus or no restore points found ---
+        if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
+            echo "DRY-RUN: sqlplus not on PATH or no restore points found."
+            echo "DRY-RUN: In live execution, V\$RESTORE_POINT would be queried here."
+            echo ""
+        else
+            echo "WARNING: Could not query restore points. Enter names manually."
+            echo ""
+        fi
+
+        local DATE_TAG_DEFAULT
+        DATE_TAG_DEFAULT=$(date '+%d%b%y' | tr '[:lower:]' '[:upper:]')
+        local CDB_RP_DEFAULT="${FLASHBACK_INSTANCE_ID}_CDB_flashback_restore_${DATE_TAG_DEFAULT}"
+        local PDB_RP_DEFAULT="${FLASHBACK_INSTANCE_ID}_PDB_flashback_restore_${DATE_TAG_DEFAULT}"
+
+        read -r -p "Enter CDB restore point name [$CDB_RP_DEFAULT]: " CDB_RP_NAME
+        CDB_RP_NAME="${CDB_RP_NAME:-$CDB_RP_DEFAULT}"
+
+        read -r -p "Enter PDB restore point name [$PDB_RP_DEFAULT]: " PDB_RP_NAME
+        PDB_RP_NAME="${PDB_RP_NAME:-$PDB_RP_DEFAULT}"
+    fi
+
+    # --- Prepare log file ---
+    local LOG_DIR="${FLASHBACK_LOG_DIR:-$SCRIPT_DIR/../logs}"
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+    local LOG_TS
+    LOG_TS=$(date '+%Y%m%d_%H%M%S')
+    local LOG_FILE="$LOG_DIR/restore_flashback_${LOG_TS}.log"
+
+    echo ""
+    echo "=========================================="
+    echo "  Restore points confirmed:"
+    echo "    CDB: $CDB_RP_NAME"
+    echo "    PDB: $PDB_RP_NAME"
+    echo ""
+    echo "  Launching restore in detached mode..."
+    echo "  Log file: $LOG_FILE"
+    echo "=========================================="
+
+    # --- Launch detached ---
+    export FLASHBACK_CDB_RESTORE_POINT="$CDB_RP_NAME"
+    export FLASHBACK_PDB_RESTORE_POINT="$PDB_RP_NAME"
+
+    nohup sh "$SCRIPT_DIR/oracle/restore_flashback.sh" > "$LOG_FILE" 2>&1 &
+    local RESTORE_PID=$!
+
+    # Save PID and log path for status tracking (menu option 8).
+    printf '%s %s\n' "$RESTORE_PID" "$LOG_FILE" >> "$RESTORE_PID_FILE"
+    chmod 600 "$RESTORE_PID_FILE"
+
+    echo ""
+    echo "  Restore PID: $RESTORE_PID"
+    echo ""
+    echo "  Monitor progress with:"
+    echo "    tail -f $LOG_FILE"
+    echo ""
+    echo "  Check status from menu: option 8"
+    echo ""
+    pause
+}
+
+view_restore_status() {
+    clear
+    echo "=========================================="
+    echo "         RESTORE PROCESS STATUS           "
+    echo "=========================================="
+
+    if [ ! -f "$RESTORE_PID_FILE" ]; then
+        echo "No restore processes have been launched yet."
+        pause
+        return
+    fi
+
+    echo ""
+    printf "  %-8s  %-10s  %s\n" "PID" "STATUS" "LOG FILE"
+    echo "  ------   --------   ------------------------------------------"
+
+    while IFS=' ' read -r pid logfile rest; do
+        # Skip blank/malformed lines.
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+
+        if kill -0 "$pid" 2>/dev/null; then
+            status="RUNNING"
+        else
+            status="DONE"
+        fi
+        printf "  %-8s  %-10s  %s\n" "$pid" "$status" "$logfile"
+    done < "$RESTORE_PID_FILE"
+
+    echo ""
+    echo "=========================================="
+    echo "  Latest log tail (last 15 lines):"
+    echo "=========================================="
+
+    # Show tail of the most recent log file.
+    latest_log=$(tail -1 "$RESTORE_PID_FILE" | awk '{print $2}')
+    if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
+        tail -15 "$latest_log"
+    else
+        echo "  Log file not found."
+    fi
+
+    echo ""
+    echo "=========================================="
+    echo "  To follow live: tail -f <LOG FILE>"
+    echo "=========================================="
+    pause
+}
+
 not_in_scope_yet() {
     clear
     echo "=========================================="
@@ -191,6 +399,7 @@ not_in_scope_yet() {
     echo "Current active scope is:"
     echo "  1. View Flashback"
     echo "  2. Make flashback request"
+    echo "  3. Restore flashback"
     pause
 }
 
@@ -235,22 +444,24 @@ while true; do
     echo "=========================================="
     echo "1. View Flashback"
     echo "2. Make flashback request"
-    echo "3. Restore flashback              (next phase)"
+    echo "3. Restore flashback"
     echo "4. Validate system ready for Load test (next phase)"
     echo "5. Exit"
     echo "6. Delete stored config"
     echo "7. Change execution mode (${FLASHBACK_MODE:-dry-run})"
+    echo "8. View restore status"
     echo "=========================================="
-    read -r -p "Enter your choice [1-7]: " choice
+    read -r -p "Enter your choice [1-8]: " choice
 
     case "$choice" in
         1) view_flashback ;;
         2) make_flashback_request ;;
-        3) not_in_scope_yet ;;
+        3) restore_flashback ;;
         4) not_in_scope_yet ;;
         5) echo "Exiting..."; exit 0 ;;
         6) delete_config; load_or_prompt_config ;;
         7) toggle_mode ;;
+        8) view_restore_status ;;
         *) echo "Invalid option."; pause ;;
     esac
 done
