@@ -9,7 +9,7 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execu
 log() {
     echo "$*"
     mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
-    printf '[%s] [validate_load_test] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+    printf '[validate_load_test] %s\n' "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 section() {
@@ -17,6 +17,13 @@ section() {
     echo "=========================================="
     echo "$1"
     echo "=========================================="
+}
+
+marker() {
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[validate_load_test] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 record_pass() {
@@ -40,7 +47,6 @@ APP_BASE_DIR="${FLASHBACK_APP_BASE_DIR:-/db800/app/oracle/r122${INSTANCE_ID}}"
 APP_HOST="${FLASHBACK_APP_HOST:-}"
 SSH_USER="${FLASHBACK_SSH_USER:-$(whoami)}"
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
-FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
 APP_INFO_FILE="${FLASHBACK_APP_INFO_FILE:-$HOME/.flashback_app_info}"
 MIN_FREE_GB="${FLASHBACK_LOAD_TEST_MIN_FREE_GB:-50}"
 MIN_APP_PROCESSES="${FLASHBACK_LOAD_TEST_MIN_APP_PROCESSES:-3}"
@@ -103,14 +109,7 @@ EOF
 check_app_node() {
     section "APPLICATION NODE READINESS"
 
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        record_pass "DRY-RUN: Would verify SSH/local command access for application node."
-        record_pass "DRY-RUN: Would check app process count is >= $MIN_APP_PROCESSES."
-        record_pass "DRY-RUN: Would verify RUN/PATCH/NE filesystem paths."
-        record_pass "DRY-RUN: Would verify at least ${MIN_FREE_GB}GB free under $APP_BASE_DIR."
-        return 0
-    fi
-
+    marker "START" "Application node readiness checks"
     if run_app_cmd "test -d '$APP_BASE_DIR'"; then
         record_pass "Application base directory is reachable: $APP_BASE_DIR"
     else
@@ -142,6 +141,7 @@ check_app_node() {
     else
         record_warn "Free space under $APP_BASE_DIR is below ${MIN_FREE_GB}GB."
     fi
+    marker "END" "Application node readiness checks"
 }
 
 check_urls() {
@@ -152,15 +152,10 @@ check_urls() {
         return 0
     fi
 
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        for url in $URLS; do
-            record_pass "DRY-RUN: Would check URL: $url"
-        done
-        return 0
-    fi
-
+    marker "START" "Application URL checks"
     if ! command -v curl >/dev/null 2>&1; then
         record_warn "curl is not available; skipping URL checks."
+        marker "END" "Application URL checks"
         return 0
     fi
 
@@ -171,17 +166,11 @@ check_urls() {
             *) record_fail "URL check failed ($status): $url" ;;
         esac
     done
+    marker "END" "Application URL checks"
 }
 
 run_db_checks() {
     section "DATABASE READINESS"
-
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        record_pass "DRY-RUN: Would source Oracle environment and connect with sqlplus."
-        record_pass "DRY-RUN: Would verify database and PDB are open."
-        record_warn "DRY-RUN: Would report invalid object count, active sessions, and blocking sessions."
-        return 0
-    fi
 
     if [ -n "$ORACLE_ENV" ] && [ -f "$ORACLE_ENV" ]; then
         # shellcheck disable=SC1090
@@ -193,6 +182,7 @@ run_db_checks() {
         return 0
     fi
 
+    marker "START" "Database readiness SQL checks"
     db_output=$(sqlplus -S "/ as sysdba" <<EOF 2>/dev/null || true
 SET HEAD OFF FEED OFF PAGES 0 LINES 500 TRIMSPOOL ON
 SELECT 'DATABASE_OPEN_MODE=' || OPEN_MODE FROM V\$DATABASE;
@@ -207,6 +197,7 @@ SELECT 'BLOCKING_SESSIONS=' || COUNT(*) FROM GV\$SESSION WHERE BLOCKING_SESSION 
 EXIT;
 EOF
 )
+    marker "END" "Database readiness SQL checks"
 
     echo "$db_output"
 
@@ -242,20 +233,18 @@ EOF
 check_alert_log() {
     section "ALERT LOG CHECK"
 
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        record_warn "DRY-RUN: Would scan recent alert log entries for ORA-/TNS-/error messages."
-        return 0
-    fi
-
+    marker "START" "Recent alert log scan"
     alert_file=$(detect_alert_log || true)
     if [ -z "$alert_file" ]; then
         record_warn "Alert log path not configured and could not be detected."
+        marker "END" "Recent alert log scan"
         return 0
     fi
 
     log "Alert log: $alert_file"
     if [ ! -f "$alert_file" ]; then
         record_warn "Alert log file not found: $alert_file"
+        marker "END" "Recent alert log scan"
         return 0
     fi
 
@@ -266,6 +255,7 @@ check_alert_log() {
         record_warn "Recent alert-log warnings/errors found:"
         echo "$recent_errors"
     fi
+    marker "END" "Recent alert log scan"
 }
 
 echo "=========================================="
@@ -274,7 +264,6 @@ echo "=========================================="
 log "Instance     : $INSTANCE_ID"
 log "PDB          : $PDB_NAME"
 log "App base dir : $APP_BASE_DIR"
-log "Mode         : $FLASHBACK_MODE"
 
 check_app_node
 check_urls

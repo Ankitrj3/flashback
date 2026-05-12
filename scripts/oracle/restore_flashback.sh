@@ -11,12 +11,18 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execu
 log() {
     echo "$*"
     mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
-    printf '[%s] [restore_flashback] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+    printf '[restore_flashback] %s\n' "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+}
+
+marker() {
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[restore_flashback] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
 PDB_NAME="${FLASHBACK_PDB_NAME:-$INSTANCE_ID}"
-FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
 RESTORE_DATE_TAG="${FLASHBACK_RESTORE_DATE_TAG:-}"
 SKIP_APP_STOP="${FLASHBACK_SKIP_APP_STOP:-false}"
 
@@ -30,22 +36,11 @@ if [ -z "$CDB_RP_NAME" ] || [ -z "$PDB_RP_NAME" ]; then
     log "Querying available restore points..."
     echo ""
 
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        if ! command -v sqlplus >/dev/null 2>&1; then
-            log "DRY-RUN: sqlplus not on PATH. Skipping live restore point query."
-            log "DRY-RUN: In live execution, V\$RESTORE_POINT would be queried here."
-            echo ""
-        else
-            sh "$SCRIPT_DIR/list_restore_points.sh" 2>/dev/null || true
-            echo ""
-        fi
-    else
-        if ! sh "$SCRIPT_DIR/list_restore_points.sh"; then
-            log "ERROR: Failed to query restore points."
-            exit 1
-        fi
-        echo ""
+    if ! sh "$SCRIPT_DIR/list_restore_points.sh"; then
+        log "ERROR: Failed to query restore points."
+        exit 1
     fi
+        echo ""
 
     DATE_TAG_DEFAULT=$(date '+%d%b%y')
     CDB_RP_DEFAULT="${INSTANCE_ID}_CDB_flashback_restore_${DATE_TAG_DEFAULT}"
@@ -63,14 +58,13 @@ fi
 export FLASHBACK_CDB_RESTORE_POINT="$CDB_RP_NAME"
 export FLASHBACK_PDB_RESTORE_POINT="$PDB_RP_NAME"
 
-echo "[START] Restore Flashback : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "START" "Restore Flashback"
 log "CDB Restore Point: $CDB_RP_NAME"
 log "PDB Restore Point: $PDB_RP_NAME"
 log "App backup tag   : ${RESTORE_DATE_TAG:-auto-detect latest}"
-log "Mode             : $FLASHBACK_MODE"
 
 echo ""
-echo "[START] Step 1/5: Stopping application services : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "START" "Step 1/5: Stopping application services"
 if [ "$SKIP_APP_STOP" = "true" ]; then
     log "Application service stop was already completed by the menu pre-check."
 else
@@ -79,38 +73,38 @@ else
         exit 1
     fi
 fi
-echo "[END] Step 1/5: Stopping application services : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "END" "Step 1/5: Stopping application services"
 
 echo ""
-echo "[START] Step 2/5: Restoring application filesystems : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "START" "Step 2/5: Restoring application filesystems"
 if ! sh "$SCRIPT_DIR/restore_backup.sh" "$RESTORE_DATE_TAG"; then
     log "ERROR: Application filesystem restore failed."
     exit 1
 fi
-echo "[END] Step 2/5: Restoring application filesystems : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "END" "Step 2/5: Restoring application filesystems"
 
 echo ""
-echo "[START] Step 3/5: Flashing back database : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "START" "Step 3/5: Flashing back database"
 if ! sh "$SCRIPT_DIR/flashback_database.sh" "$CDB_RP_NAME" "$PDB_RP_NAME"; then
     log "ERROR: Database flashback failed."
     exit 1
 fi
-echo "[END] Step 3/5: Flashing back database : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "END" "Step 3/5: Flashing back database"
 
 echo ""
-echo "[START] Step 4/5: Starting application services : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "START" "Step 4/5: Starting application services"
 if ! sh "$SCRIPT_DIR/start_app_services.sh"; then
     log "WARNING: Application startup may need manual intervention."
 fi
-echo "[END] Step 4/5: Starting application services : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "END" "Step 4/5: Starting application services"
 
 echo ""
-echo "[START] Step 5/5: Restore summary : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "START" "Step 5/5: Restore summary"
 log "  CDB Restore Point : $CDB_RP_NAME (flashed back and dropped)"
 log "  PDB Restore Point : $PDB_RP_NAME (flashed back and dropped)"
 log "  Filesystems       : restored from tar backups"
 log "  App services      : start attempted"
-log "  Mode              : $FLASHBACK_MODE"
-echo "[END] Restore Flashback : $(date '+%Y-%m-%d %H:%M:%S')"
+marker "END" "Step 5/5: Restore summary"
+marker "END" "Restore Flashback"
 
 exit 0

@@ -10,7 +10,14 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execu
 log() {
     echo "$*"
     mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
-    printf '[%s] [stop_app_services] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+    printf '[stop_app_services] %s\n' "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+}
+
+marker() {
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[stop_app_services] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
@@ -21,7 +28,6 @@ APPS_USER="${FLASHBACK_APPS_USER:-apps}"
 APPS_PASS="${FLASHBACK_APPS_PASS:-}"
 WLS_PASS="${FLASHBACK_WLS_PASS:-}"
 STOP_CMD="${FLASHBACK_STOP_CMD:-adstpall.sh}"
-FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
 
 run_app_cmd() {
     cmd="$1"
@@ -33,10 +39,6 @@ run_app_cmd() {
 }
 
 count_app_processes() {
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        echo "${FLASHBACK_DRY_RUN_PROCESS_COUNT:-0}"
-        return 0
-    fi
     run_app_cmd "ps -ef | egrep \"FND|INV|frm|java|http|aporx\" | egrep -v \"bash|ssh|ps|grep\" | wc -l" 2>/dev/null | tr -d ' '
 }
 
@@ -102,21 +104,17 @@ wait_for_processes_down() {
 
 # --- Main ---
 
+marker "START" "Stop application services"
 proc_count=$(normalize_count "$(count_app_processes || echo "999")")
 log "Application process count: $proc_count"
 
 if [ "$proc_count" -eq 0 ]; then
     log "No application services running. Nothing to stop."
+    marker "END" "Stop application services"
     exit 0
 fi
 
 log "Application services are running ($proc_count processes)."
-
-if [ "$FLASHBACK_MODE" != "real" ]; then
-    log "DRY-RUN: Would run application shutdown using $STOP_CMD."
-    log "DRY-RUN: Would wait until application process count becomes zero."
-    exit 0
-fi
 
 prompt_credentials
 run_shutdown
@@ -127,4 +125,5 @@ if ! wait_for_processes_down; then
 fi
 
 log "Application services stopped successfully."
+marker "END" "Stop application services"
 exit 0

@@ -9,13 +9,19 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execu
 log() {
     echo "$*"
     mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
-    printf '[%s] [flashback_database] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+    printf '[flashback_database] %s\n' "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+}
+
+marker() {
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[flashback_database] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
 PDB_NAME="${FLASHBACK_PDB_NAME:-$INSTANCE_ID}"
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
-FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
 DB_UNIQUE_NAME="${FLASHBACK_DB_UNIQUE_NAME:-$INSTANCE_ID}"
 
 CDB_RP_NAME="${1:-${FLASHBACK_CDB_RESTORE_POINT:-}}"
@@ -49,27 +55,13 @@ log "PDB Name         : $PDB_NAME"
 log "CDB Restore Point: $CDB_RP_NAME"
 log "PDB Restore Point: $PDB_RP_NAME"
 log "DB unique name   : $DB_UNIQUE_NAME"
-log "Mode             : $FLASHBACK_MODE"
-
-if [ "$FLASHBACK_MODE" != "real" ]; then
-    if ! command -v sqlplus >/dev/null 2>&1; then
-        log "DRY-RUN: sqlplus is not on PATH here, but live execution would require it."
-    fi
-    log "DRY-RUN: Would connect using: sqlplus $CONNECT_LABEL"
-    log "DRY-RUN: Step 1 - Show cluster_database and prepare RAC database if needed."
-    log "DRY-RUN: Step 2 - Verify restore points exist in V\$RESTORE_POINT."
-    log "DRY-RUN: Step 3 - Close PDB and flashback PDB to \"$PDB_RP_NAME\"."
-    log "DRY-RUN: Step 4 - Restart CDB in mount and flashback CDB to \"$CDB_RP_NAME\"."
-    log "DRY-RUN: Step 5 - Open PDB, drop restore points, and verify DB state."
-    log "DRY-RUN: Step 6 - Restore cluster_database=TRUE and start with srvctl if RAC was detected."
-    exit 0
-fi
 
 if ! command -v sqlplus >/dev/null 2>&1; then
     log "ERROR: sqlplus not found on PATH."
     exit 3
 fi
 
+marker "START" "Flashback database precheck"
 cluster_value=$(sqlplus -S /nolog <<EOF 2>/dev/null | awk -F= '/^CLUSTER_DATABASE=/{print $2; exit}'
 CONNECT $CONNECT_CMD
 SET HEAD OFF FEED OFF PAGES 0 LINES 200 TRIMSPOOL ON
@@ -110,8 +102,9 @@ STARTUP;
 EXIT;
 EOF
 fi
+marker "END" "Flashback database precheck"
 
-log "Step 1: Verifying restore points exist..."
+marker "START" "Verify restore points"
 verify_result=$(sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
@@ -130,8 +123,9 @@ if ! echo "$verify_result" | grep -q "RP_FOUND=$PDB_RP_NAME"; then
     exit 1
 fi
 log "Both restore points verified."
+marker "END" "Verify restore points"
 
-log "Step 2: Closing and flashing back PDB..."
+marker "START" "Flashback PDB"
 pdb_result=$(sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
@@ -145,8 +139,9 @@ EOF
 )
 echo "$pdb_result"
 log "PDB flashback completed."
+marker "END" "Flashback PDB"
 
-log "Step 3: Flashing back CDB..."
+marker "START" "Flashback CDB"
 cdb_result=$(sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
@@ -159,8 +154,10 @@ EOF
 )
 echo "$cdb_result"
 log "CDB flashback completed."
+marker "END" "Flashback CDB"
 
-log "Step 4: Opening PDB..."
+marker "START" "Post-flashback cleanup"
+log "Opening PDB..."
 sqlplus -S /nolog <<EOF
 CONNECT $CONNECT_CMD
 ALTER PLUGGABLE DATABASE $PDB_NAME OPEN;
@@ -168,7 +165,7 @@ EXIT;
 EOF
 log "PDB opened."
 
-log "Step 5: Dropping restore points..."
+log "Dropping restore points..."
 sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
@@ -180,7 +177,7 @@ EXIT;
 EOF
 log "Restore points dropped."
 
-log "Step 6: Verifying database state..."
+log "Verifying database state..."
 sqlplus -S /nolog <<EOF
 CONNECT $CONNECT_CMD
 SET PAGES 220 LINES 200 HEAD ON FEED OFF
@@ -209,4 +206,5 @@ EOF
 fi
 
 log "SUCCESS: Database flashback complete."
+marker "END" "Post-flashback cleanup"
 exit 0

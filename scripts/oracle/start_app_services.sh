@@ -9,7 +9,14 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execu
 log() {
     echo "$*"
     mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
-    printf '[%s] [start_app_services] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+    printf '[start_app_services] %s\n' "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+}
+
+marker() {
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[start_app_services] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
@@ -20,7 +27,6 @@ APPS_USER="${FLASHBACK_APPS_USER:-apps}"
 APPS_PASS="${FLASHBACK_APPS_PASS:-}"
 WLS_PASS="${FLASHBACK_WLS_PASS:-}"
 START_CMD="${FLASHBACK_START_CMD:-adstrtal.sh}"
-FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
 
 run_app_cmd() {
     cmd="$1"
@@ -32,10 +38,6 @@ run_app_cmd() {
 }
 
 count_app_processes() {
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        echo "${FLASHBACK_DRY_RUN_PROCESS_COUNT:-0}"
-        return 0
-    fi
     run_app_cmd "ps -ef | egrep \"FND|INV|frm|java|http|aporx\" | egrep -v \"bash|ssh|ps|grep\" | wc -l" 2>/dev/null | tr -d ' '
 }
 
@@ -103,13 +105,8 @@ wait_for_processes_up() {
 
 # --- Main ---
 
+marker "START" "Start application services"
 log "Instance: $INSTANCE_ID"
-
-if [ "$FLASHBACK_MODE" != "real" ]; then
-    log "DRY-RUN: Would run application startup using $START_CMD."
-    log "DRY-RUN: Would wait for application processes to appear."
-    exit 0
-fi
 
 prompt_credentials
 run_startup
@@ -121,4 +118,5 @@ if ! wait_for_processes_up; then
 fi
 
 log "Application services started successfully."
+marker "END" "Start application services"
 exit 0

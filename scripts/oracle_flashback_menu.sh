@@ -5,12 +5,19 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ENV_FILE="$HOME/.flashback_env"
 APP_INFO_FILE="$HOME/.flashback_app_info"
 RESTORE_PID_FILE="$HOME/.flashback_restore_pid"
-REQUESTED_FLASHBACK_MODE="${FLASHBACK_MODE:-}"
 FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../logs/flashback_execution.log}"
 
 pause() {
     echo ""
     read -r -p "Press [Enter] key to continue..." _
+}
+
+marker() {
+    local ts
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[oracle_flashback_menu] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 apply_detected_config() {
@@ -33,10 +40,6 @@ load_or_prompt_config() {
     if [ -f "$ENV_FILE" ]; then
         # shellcheck disable=SC1090
         . "$ENV_FILE"
-    fi
-
-    if [ -n "$REQUESTED_FLASHBACK_MODE" ]; then
-        FLASHBACK_MODE="$REQUESTED_FLASHBACK_MODE"
     fi
 
     if [ -z "${FLASHBACK_INSTANCE_ID:-}" ] || [ -z "${FLASHBACK_PDB_NAME:-}" ] || [ -z "${FLASHBACK_ALERT_LOG:-}" ]; then
@@ -81,11 +84,6 @@ load_or_prompt_config() {
     FLASHBACK_APPS_PASS="${FLASHBACK_APPS_PASS:-}"
     FLASHBACK_WLS_PASS="${FLASHBACK_WLS_PASS:-}"
     FLASHBACK_START_CMD="${FLASHBACK_START_CMD:-adstrtal.sh}"
-    FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
-    FLASHBACK_DRY_RUN_PROCESS_COUNT="${FLASHBACK_DRY_RUN_PROCESS_COUNT:-0}"
-    if [ "$FLASHBACK_MODE" != "dry-run" ] && [ "$FLASHBACK_MODE" != "real" ]; then
-        FLASHBACK_MODE="dry-run"
-    fi
 
     {
         printf 'export FLASHBACK_INSTANCE_ID=%q\n' "$FLASHBACK_INSTANCE_ID"
@@ -102,15 +100,13 @@ load_or_prompt_config() {
         printf 'export FLASHBACK_APPS_PASS=%q\n' "$FLASHBACK_APPS_PASS"
         printf 'export FLASHBACK_WLS_PASS=%q\n' "$FLASHBACK_WLS_PASS"
         printf 'export FLASHBACK_START_CMD=%q\n' "$FLASHBACK_START_CMD"
-        printf 'export FLASHBACK_MODE=%q\n' "$FLASHBACK_MODE"
-        printf 'export FLASHBACK_DRY_RUN_PROCESS_COUNT=%q\n' "$FLASHBACK_DRY_RUN_PROCESS_COUNT"
         printf 'export FLASHBACK_LOG_FILE=%q\n' "$FLASHBACK_LOG_FILE"
     } > "$ENV_FILE"
     chmod 600 "$ENV_FILE"
 
     export FLASHBACK_INSTANCE_ID FLASHBACK_PDB_NAME FLASHBACK_ORACLE_ENV FLASHBACK_DB_HOST
     export FLASHBACK_APP_HOST FLASHBACK_SSH_USER FLASHBACK_APP_BASE_DIR FLASHBACK_BACKUP_DIR
-    export FLASHBACK_ALERT_LOG FLASHBACK_APP_INFO_FILE FLASHBACK_APPS_USER FLASHBACK_APPS_PASS FLASHBACK_WLS_PASS FLASHBACK_START_CMD FLASHBACK_MODE FLASHBACK_DRY_RUN_PROCESS_COUNT
+    export FLASHBACK_ALERT_LOG FLASHBACK_APP_INFO_FILE FLASHBACK_APPS_USER FLASHBACK_APPS_PASS FLASHBACK_WLS_PASS FLASHBACK_START_CMD
     export FLASHBACK_LOG_FILE
 }
 
@@ -143,11 +139,6 @@ make_flashback_request() {
     echo "         MAKE FLASHBACK REQUEST           "
     echo "=========================================="
     echo "This will check application services, create DB guaranteed restore points, and secure application tar backups."
-    echo "Execution mode: ${FLASHBACK_MODE:-dry-run}"
-    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
-        echo "Dry-run mode prints the actions and commands without changing DB or filesystems."
-        echo "Run with FLASHBACK_MODE=real for live execution."
-    fi
     echo ""
     read -r -p "Continue with Make Flashback Request? Type YES: " confirm
     if [ "$confirm" != "YES" ]; then
@@ -200,13 +191,6 @@ show_db_session_report() {
     echo "       DB APPLICATION SESSION CHECK       "
     echo "=========================================="
 
-    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
-        echo "DRY-RUN: Would display gv\$session counts for non-background programs."
-        echo "DRY-RUN: SQL 1: select count(*),program,module,inst_id from gv\$session where program not like 'oracle@%' group by program,module,inst_id order by count(*);"
-        echo "DRY-RUN: SQL 2: select count(*),status from gv\$session where program not like 'oracle@%' group by status;"
-        return 0
-    fi
-
     if [ -n "${FLASHBACK_ORACLE_ENV:-}" ] && [ -f "$FLASHBACK_ORACLE_ENV" ]; then
         # shellcheck disable=SC1090
         . "$FLASHBACK_ORACLE_ENV"
@@ -217,6 +201,7 @@ show_db_session_report() {
         return 0
     fi
 
+    marker "START" "DB application session report"
     sqlplus -S "/ as sysdba" <<'EOF'
 SET PAGES 220 LINES 220 TRIMSPOOL ON
 COL PROGRAM FOR A45
@@ -236,6 +221,7 @@ WHERE PROGRAM NOT LIKE 'oracle@%'
 GROUP BY STATUS;
 EXIT;
 EOF
+    marker "END" "DB application session report"
 }
 
 run_app_list_cmd() {
@@ -254,22 +240,14 @@ choose_restore_backup_date_tag() {
     echo "=========================================="
 
     local tar_list=""
-    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
-        local sample_tag
-        sample_tag=$(date '+%d%b%y')
-        echo "DRY-RUN: Would list ${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_*_backup_*.tar on application node."
-        echo "${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_fs_ne_backup_${sample_tag}.tar"
-        echo "${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_fs1_Patch_backup_${sample_tag}.tar"
-        echo "${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_fs2_Run_backup_${sample_tag}.tar"
-        tar_list="${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}_fs_ne_backup_${sample_tag}.tar"
-    else
-        tar_list=$(run_app_list_cmd "ls -1t '${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}'_*_backup_*.tar 2>/dev/null" || true)
-        if [ -z "$tar_list" ]; then
-            echo "ERROR: No application backup tar files found in $FLASHBACK_BACKUP_DIR."
-            return 1
-        fi
-        echo "$tar_list"
+    marker "START" "List application backup tar files"
+    tar_list=$(run_app_list_cmd "ls -1t '${FLASHBACK_BACKUP_DIR}/${FLASHBACK_INSTANCE_ID}'_*_backup_*.tar 2>/dev/null" || true)
+    marker "END" "List application backup tar files"
+    if [ -z "$tar_list" ]; then
+        echo "ERROR: No application backup tar files found in $FLASHBACK_BACKUP_DIR."
+        return 1
     fi
+    echo "$tar_list"
 
     echo ""
     echo "Available backup date tags:"
@@ -300,11 +278,6 @@ restore_flashback() {
     echo "The restore runs DETACHED — your terminal will be freed immediately."
     echo "All output is written to a log file you can tail at any time."
     echo ""
-    echo "Execution mode: ${FLASHBACK_MODE:-dry-run}"
-    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
-        echo "Dry-run mode prints the actions and commands without changing DB or filesystems."
-        echo "Run with FLASHBACK_MODE=real for live execution."
-    fi
     echo ""
     read -r -p "Continue with Restore Flashback? Type YES: " confirm
     if [ "$confirm" != "YES" ]; then
@@ -335,6 +308,7 @@ restore_flashback() {
 
     # Try to get a parseable list of restore point names from Oracle.
     local rp_raw=""
+    marker "START" "Query available restore points"
     if command -v sqlplus >/dev/null 2>&1; then
         local DB_AUTH="${FLASHBACK_DB_AUTH:-os}"
         local CONNECT_CMD
@@ -351,6 +325,7 @@ EXIT;
 EOF
         )
     fi
+    marker "END" "Query available restore points"
 
     # Build an array of restore point names (skip blank lines).
     local rp_names=()
@@ -395,14 +370,8 @@ EOF
         fi
     else
         # --- Fallback: no sqlplus or no restore points found ---
-        if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
-            echo "DRY-RUN: sqlplus not on PATH or no restore points found."
-            echo "DRY-RUN: In live execution, V\$RESTORE_POINT would be queried here."
-            echo ""
-        else
-            echo "WARNING: Could not query restore points. Enter names manually."
-            echo ""
-        fi
+        echo "WARNING: Could not query restore points. Enter names manually."
+        echo ""
 
         local DATE_TAG_DEFAULT
         DATE_TAG_DEFAULT=$(date '+%d%b%y')
@@ -525,11 +494,6 @@ validate_load_test_ready() {
     echo "      VALIDATE LOAD TEST READINESS        "
     echo "=========================================="
     echo "This will validate application, database, filesystem, and alert-log readiness for load testing."
-    echo "Execution mode: ${FLASHBACK_MODE:-dry-run}"
-    if [ "${FLASHBACK_MODE:-dry-run}" != "real" ]; then
-        echo "Dry-run mode shows the validations that would run."
-        echo "Run with FLASHBACK_MODE=real for live validation."
-    fi
     echo ""
     read -r -p "Continue with Load Test Readiness Validation? Type YES: " confirm
     if [ "$confirm" != "YES" ]; then
@@ -548,38 +512,6 @@ validate_load_test_ready() {
     pause
 }
 
-toggle_mode() {
-    clear
-    echo "=========================================="
-    echo "             EXECUTION MODE               "
-    echo "=========================================="
-    echo "Current mode: ${FLASHBACK_MODE:-dry-run}"
-    echo ""
-    echo "1. dry-run"
-    echo "2. real"
-    echo ""
-    read -r -p "Choose mode [1-2]: " mode_choice
-    case "$mode_choice" in
-        1) FLASHBACK_MODE="dry-run" ;;
-        2)
-            read -r -p "Type REAL to enable live execution: " real_confirm
-            if [ "$real_confirm" = "REAL" ]; then
-                FLASHBACK_MODE="real"
-            else
-                echo "Mode unchanged."
-                pause
-                return
-            fi
-            ;;
-        *) echo "Invalid option."; pause; return ;;
-    esac
-    REQUESTED_FLASHBACK_MODE="$FLASHBACK_MODE"
-    export FLASHBACK_MODE
-    load_or_prompt_config
-    echo "Execution mode set to: $FLASHBACK_MODE"
-    pause
-}
-
 load_or_prompt_config
 
 while true; do
@@ -593,10 +525,9 @@ while true; do
     echo "4. Validate system ready for Load test"
     echo "5. Exit"
     echo "6. Delete stored config"
-    echo "7. Change execution mode (${FLASHBACK_MODE:-dry-run})"
-    echo "8. View restore status"
+    echo "7. View restore status"
     echo "=========================================="
-    read -r -p "Enter your choice [1-8]: " choice
+    read -r -p "Enter your choice [1-7]: " choice
 
     case "$choice" in
         1) view_flashback ;;
@@ -605,8 +536,7 @@ while true; do
         4) validate_load_test_ready ;;
         5) echo "Exiting..."; exit 0 ;;
         6) delete_config; load_or_prompt_config ;;
-        7) toggle_mode ;;
-        8) view_restore_status ;;
+        7) view_restore_status ;;
         *) echo "Invalid option."; pause ;;
     esac
 done

@@ -9,11 +9,14 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execu
 log() {
     echo "$*" >&2
     mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
-    printf '[%s] [list_restore_points] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+    printf '[list_restore_points] %s\n' "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 marker() {
-    log "[$1] $2 : $(date '+%Y-%m-%d %H:%M:%S')"
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts" >&2
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[list_restore_points] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"

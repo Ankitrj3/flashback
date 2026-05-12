@@ -10,7 +10,14 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execu
 log() {
     echo "$*"
     mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
-    printf '[%s] [capture_app_info] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+    printf '[capture_app_info] %s\n' "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+}
+
+marker() {
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[capture_app_info] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
@@ -23,7 +30,6 @@ WLS_PASS="${FLASHBACK_WLS_PASS:-}"
 BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backup/tar}"
 APP_INFO_FILE="${FLASHBACK_APP_INFO_FILE:-$HOME/.flashback_app_info}"
 STOP_CMD="${FLASHBACK_STOP_CMD:-adstpall.sh}"
-FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
 VERIFY_DB_SESSIONS="${FLASHBACK_VERIFY_DB_SESSIONS:-true}"
 
 run_app_cmd() {
@@ -36,10 +42,6 @@ run_app_cmd() {
 }
 
 count_app_processes() {
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        echo "${FLASHBACK_DRY_RUN_PROCESS_COUNT:-0}"
-        return 0
-    fi
     run_app_cmd "ps -ef | egrep \"FND|INV|frm|java|http|aporx\" | egrep -v \"bash|ssh|ps|grep\" | wc -l" 2>/dev/null | tr -d ' '
 }
 
@@ -68,11 +70,6 @@ detect_file_system_roles() {
     RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
     PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
     NE_FS="$APP_BASE_DIR/fs_ne"
-
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        log "DRY-RUN: Would detect RUN/PATCH roles from s_file_edition_type in context XML."
-        return 0
-    fi
 
     role_output=$(run_app_cmd "for fs in fs1 fs2; do xml=\$(ls -1 '$APP_BASE_DIR'/\$fs/inst/apps/*/appl/admin/*.xml 2>/dev/null | head -1); if [ -n \"\$xml\" ]; then edition=\$(sed -n 's/.*<[^>]*s_file_edition_type[^>]*>\([^<]*\)<.*/\1/p' \"\$xml\" | head -1 | tr '[:upper:]' '[:lower:]'); echo \"\$fs=\$edition\"; fi; done" 2>/dev/null || true)
 
@@ -118,14 +115,6 @@ write_app_info_file() {
 }
 
 verify_file_systems() {
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        log "DRY-RUN: Would verify application paths on app server:"
-        log "DRY-RUN:   test -d '$RUN_FS'"
-        log "DRY-RUN:   test -d '$PATCH_FS'"
-        log "DRY-RUN:   test -d '$NE_FS'"
-        return 0
-    fi
-
     # The flashback request must be anchored to the actual app node paths.
     # Fail early if any expected EBS filesystem cannot be reached.
     if ! run_app_cmd "test -d '$RUN_FS' && test -d '$PATCH_FS' && test -d '$NE_FS'"; then
@@ -141,11 +130,6 @@ run_stop_app_services() {
 
 check_db_app_sessions() {
     if [ "$VERIFY_DB_SESSIONS" != "true" ]; then
-        return 0
-    fi
-
-    if [ "$FLASHBACK_MODE" != "real" ]; then
-        log "DRY-RUN: Would check DB active application sessions from v\$session."
         return 0
     fi
 
@@ -179,8 +163,10 @@ else
     log "Application host             : local"
 fi
 
+marker "START" "Application process count check"
 proc_count=$(normalize_count "$(count_app_processes || echo "999")")
 log "Application process count    : $proc_count"
+marker "END" "Application process count check"
 
 if [ "$proc_count" -gt 2 ]; then
     echo ""
@@ -196,10 +182,7 @@ if [ "$proc_count" -gt 2 ]; then
             exit 3
         fi
 
-        if [ "$FLASHBACK_MODE" != "real" ]; then
-            log "DRY-RUN: Would run application shutdown using $STOP_CMD."
-            log "DRY-RUN: Would wait until application process count becomes zero."
-        elif ! run_stop_app_services; then
+        if ! run_stop_app_services; then
             log "ERROR: Application processes are still running after shutdown attempt."
             exit 1
         else
@@ -210,10 +193,16 @@ else
     log "Application process count is within threshold. Backup can proceed."
 fi
 
+marker "START" "RUN/PATCH filesystem role detection"
 detect_file_system_roles
+marker "END" "RUN/PATCH filesystem role detection"
 print_file_systems
+marker "START" "Application filesystem path verification"
 verify_file_systems
+marker "END" "Application filesystem path verification"
 write_app_info_file
+marker "START" "DB application session check"
 check_db_app_sessions
+marker "END" "DB application session check"
 
 exit 0

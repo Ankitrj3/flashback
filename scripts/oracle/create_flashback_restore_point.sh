@@ -9,13 +9,19 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../../logs/flashback_execu
 log() {
     echo "$*"
     mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
-    printf '[%s] [create_flashback] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+    printf '[create_flashback] %s\n' "$*" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
+}
+
+marker() {
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$1] $2 : $ts"
+    mkdir -p "$(dirname "$FLASHBACK_LOG_FILE")" 2>/dev/null || true
+    printf '[create_flashback] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
 INSTANCE_ID="${FLASHBACK_INSTANCE_ID:-DBNAME}"
 PDB_NAME="${FLASHBACK_PDB_NAME:-$INSTANCE_ID}"
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
-FLASHBACK_MODE="${FLASHBACK_MODE:-dry-run}"
 RESTORE_SUFFIX="${FLASHBACK_RESTORE_SUFFIX:-}"
 # Client runbook format, preserving the date command's natural month case.
 DATE_TAG=$(date '+%d%b%y')
@@ -50,26 +56,12 @@ log "PDB Name     : $PDB_NAME"
 log "CDB RP name  : $CDB_RP_NAME"
 log "PDB RP name  : $PDB_RP_NAME"
 
-if [ "$FLASHBACK_MODE" != "real" ]; then
-    if ! command -v sqlplus >/dev/null 2>&1; then
-        log "DRY-RUN: sqlplus is not on PATH here, but live execution would require it."
-    fi
-    log "DRY-RUN: Would connect using: sqlplus $CONNECT_LABEL"
-    log "DRY-RUN: Would verify ARCHIVELOG and FLASHBACK_ON."
-    log "DRY-RUN: Would create CDB restore point: $CDB_RP_NAME"
-    log "DRY-RUN: Would run: ALTER SESSION SET CONTAINER=$PDB_NAME"
-    log "DRY-RUN: Would create PDB restore point: $PDB_RP_NAME"
-    log "DRY-RUN: Would query V\$RESTORE_POINT for verification."
-    log "CDB_RESTORE_POINT=$CDB_RP_NAME"
-    log "PDB_RESTORE_POINT=$PDB_RP_NAME"
-    exit 0
-fi
-
 if ! command -v sqlplus >/dev/null 2>&1; then
     log "ERROR: sqlplus not found on PATH. Run this from DB server or source DB env first."
     exit 3
 fi
 
+marker "START" "DB restore point precheck"
 precheck_result=$(sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
@@ -80,6 +72,7 @@ SET HEAD ON FEED ON
 EXIT;
 EOF
 )
+marker "END" "DB restore point precheck"
 
 echo "$precheck_result"
 
@@ -95,6 +88,7 @@ if ! echo "$precheck_result" | grep -q "FLASHBACK_ON=YES"; then
     exit 3
 fi
 
+marker "START" "Create CDB/PDB restore points"
 result=$(sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
@@ -125,9 +119,11 @@ ORDER BY TIME;
 EXIT;
 EOF
 )
+marker "END" "Create CDB/PDB restore points"
 
 echo "$result"
 
+marker "START" "Verify restore points"
 if ! echo "$result" | grep -q "$CDB_RP_NAME"; then
     log "ERROR: CDB restore point was not found after creation."
     exit 1
@@ -137,6 +133,7 @@ if ! echo "$result" | grep -q "$PDB_RP_NAME"; then
     log "ERROR: PDB restore point was not found after creation."
     exit 2
 fi
+marker "END" "Verify restore points"
 
 log "SUCCESS: Both restore points created."
 log "CDB_RESTORE_POINT=$CDB_RP_NAME"
