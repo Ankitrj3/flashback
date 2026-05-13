@@ -9,7 +9,7 @@ FLASHBACK_LOG_FILE="${FLASHBACK_LOG_FILE:-$SCRIPT_DIR/../logs/flashback_executio
 
 pause() {
     echo ""
-    read -r -p "Press [Enter] key to continue..." _
+    read -r -p "Press Enter to return to the main menu..." _
 }
 
 reload_app_info() {
