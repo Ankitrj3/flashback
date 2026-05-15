@@ -72,7 +72,9 @@ detect_file_system_roles() {
     PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
     NE_FS="$APP_BASE_DIR/fs_ne"
 
-    role_output=$(run_app_cmd "for fs in fs1 fs2; do xml=\$(ls -1 '$APP_BASE_DIR'/\$fs/inst/apps/*/appl/admin/*.xml 2>/dev/null | head -1); if [ -n \"\$xml\" ]; then edition=\$(sed -n 's/.*<[^>]*s_file_edition_type[^>]*>\([^<]*\)<.*/\1/p' \"\$xml\" | head -1 | tr '[:upper:]' '[:lower:]'); echo \"\$fs=\$edition\"; fi; done" 2>/dev/null || true)
+    # --- Method 1: XML s_file_edition_type parsing ---
+    log "Detecting RUN/PATCH filesystem roles (Method 1: context XML)..."
+    role_output=$(run_app_cmd "for fs in fs1 fs2; do xml=\$(ls -1 \'$APP_BASE_DIR\'/\$fs/inst/apps/*/appl/admin/*.xml 2>/dev/null | head -1); if [ -n \"\$xml\" ]; then edition=\$(sed -n \'s/.*<[^>]*s_file_edition_type[^>]*>\([^<]*\)<.*/\1/p\' \"\$xml\" | head -1 | tr \'[:upper:]\' \'[:lower:]\'); echo \"\$fs=\$edition\"; fi; done" 2>/dev/null || true)
 
     fs1_role=""
     fs2_role=""
@@ -87,21 +89,81 @@ detect_file_system_roles() {
 $role_output
 EOF
 
-    if [ "$fs1_role" = "run" ]; then
-        RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-        PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-    elif [ "$fs2_role" = "run" ]; then
-        RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-        PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-    elif [ "$fs1_role" = "patch" ]; then
-        RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
-        PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-    elif [ "$fs2_role" = "patch" ]; then
-        RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
-        PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+    if [ -n "$fs1_role" ] || [ -n "$fs2_role" ]; then
+        log "FS role detection method      : XML (s_file_edition_type)"
     else
-        log "WARNING: Could not detect RUN/PATCH roles from context XML; using existing fs2 RUN/fs1 PATCH default."
+        # --- Method 2: EBSapps.env symlink ---
+        log "Method 1 (XML) could not detect FS roles. Trying Method 2 (EBSapps.env symlink)..."
+        symlink_target=$(run_app_cmd "readlink '$APP_BASE_DIR/EBSapps.env' 2>/dev/null || true" 2>/dev/null || true)
+        case "$symlink_target" in
+            */fs1/*)
+                fs1_role="run"
+                fs2_role="patch"
+                log "FS role detection method      : EBSapps.env symlink -> fs1"
+                ;;
+            */fs2/*)
+                fs2_role="run"
+                fs1_role="patch"
+                log "FS role detection method      : EBSapps.env symlink -> fs2"
+                ;;
+        esac
     fi
+
+    if [ -n "$fs1_role" ] || [ -n "$fs2_role" ]; then
+        # Apply detected roles
+        if [ "$fs1_role" = "run" ]; then
+            RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+            PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+        elif [ "$fs2_role" = "run" ]; then
+            RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+            PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+        elif [ "$fs1_role" = "patch" ]; then
+            RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+            PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+        elif [ "$fs2_role" = "patch" ]; then
+            RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+            PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+        fi
+        log "  fs1 detected role          : ${fs1_role:-unknown}"
+        log "  fs2 detected role          : ${fs2_role:-unknown}"
+    else
+        # --- Method 3: Interactive operator fallback ---
+        echo ""
+        echo "=========================================="
+        echo "  WARNING: Could not automatically detect RUN/PATCH filesystem roles."
+        echo "  Tried: XML (s_file_edition_type), EBSapps.env symlink"
+        echo "  APP_BASE_DIR : $APP_BASE_DIR"
+        echo ""
+        echo "  Please confirm manually:"
+        echo "    1. fs1 = RUN,  fs2 = PATCH  (enter: 1)"
+        echo "    2. fs2 = RUN,  fs1 = PATCH  (enter: 2)  <-- default"
+        echo "=========================================="
+        printf "  Your choice [1/2, default 2]: "
+        read -r fs_choice
+        case "$fs_choice" in
+            1)
+                RUN_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+                PATCH_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+                fs1_role="run"; fs2_role="patch"
+                log "FS role detection method      : Operator confirmed (fs1=RUN, fs2=PATCH)"
+                ;;
+            *)
+                RUN_FS="$APP_BASE_DIR/fs2/EBSapps/appl"
+                PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
+                fs1_role="patch"; fs2_role="run"
+                log "FS role detection method      : Operator confirmed / default (fs2=RUN, fs1=PATCH)"
+                ;;
+        esac
+    fi
+
+    echo ""
+    echo "  FS Role Detection Result:"
+    printf "    fs1 = %-7s --> %s/fs1\n" "${fs1_role:-unknown}" "$APP_BASE_DIR"
+    printf "    fs2 = %-7s --> %s/fs2\n" "${fs2_role:-unknown}" "$APP_BASE_DIR"
+    echo "    RUN   FS : $RUN_FS"
+    echo "    PATCH FS : $PATCH_FS"
+    echo "    NE    FS : $NE_FS"
+    echo ""
 }
 
 write_app_info_file() {

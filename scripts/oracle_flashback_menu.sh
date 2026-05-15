@@ -59,6 +59,52 @@ marker() {
     printf '[oracle_flashback_menu] [%s] %s : %s\n' "$1" "$2" "$ts" >> "$FLASHBACK_LOG_FILE" 2>/dev/null || true
 }
 
+validate_apps_password() {
+    local apps_pass="${FLASHBACK_APPS_PASS:-}"
+    local apps_user="${FLASHBACK_APPS_USER:-apps}"
+    local db_host="${FLASHBACK_DB_HOST:-}"
+    local pdb_name="${FLASHBACK_PDB_NAME:-}"
+
+    if [ -z "$apps_pass" ]; then
+        echo ""
+        echo "ERROR: No APPS password is configured (FLASHBACK_APPS_PASS is empty)."
+        echo "       Run option 6 (Delete stored config) to reconfigure, or set the password."
+        return 1
+    fi
+
+    if ! command -v sqlplus >/dev/null 2>&1; then
+        echo ""
+        echo "ERROR: sqlplus not found. Cannot validate APPS password."
+        return 1
+    fi
+
+    echo ""
+    echo "Validating APPS password..."
+    local connect_str="${apps_user}/${apps_pass}"
+    if [ -n "$db_host" ] && [ -n "$pdb_name" ]; then
+        connect_str="${apps_user}/${apps_pass}@${db_host}:${FLASHBACK_DB_PORT:-1521}/${pdb_name}"
+    fi
+
+    local auth_result
+    auth_result=$(sqlplus -S /nolog <<EOF 2>/dev/null
+WHENEVER SQLERROR EXIT 1;
+CONNECT ${connect_str}
+SELECT 'APPS_AUTH_OK' FROM DUAL;
+EXIT;
+EOF
+    )
+
+    if echo "$auth_result" | grep -q 'APPS_AUTH_OK'; then
+        echo "APPS password validated successfully."
+        return 0
+    else
+        echo ""
+        echo "ERROR: APPS password validation FAILED. Incorrect password or connection error."
+        echo "       Operation aborted. Please verify FLASHBACK_APPS_PASS and retry."
+        return 1
+    fi
+}
+
 apply_detected_config() {
     # The detector prints KEY="value" records from sqlplus. Parse only the
     # approved variables here instead of eval'ing database-derived text.
@@ -209,13 +255,34 @@ make_flashback_request() {
     fi
 
     echo ""
-    echo "Step 3/3: Starting application tar backup..."
-    if ! sh "$SCRIPT_DIR/oracle/create_backup.sh"; then
-        restart_app_if_needed "application backup failure" || true
-        echo "ERROR: Application backup failed."
+    echo "Step 3/3: Validating APPS password before launching backup..."
+    if ! validate_apps_password; then
+        restart_app_if_needed "backup pre-check failure" || true
         pause
         return
     fi
+
+    # --- Prepare backup log file ---
+    local BK_LOG_DIR="${FLASHBACK_LOG_DIR:-$SCRIPT_DIR/../logs}"
+    mkdir -p "$BK_LOG_DIR" 2>/dev/null || true
+    local BK_LOG_TS
+    BK_LOG_TS=$(date '+%Y%m%d_%H%M%S')
+    local BK_LOG_FILE="$BK_LOG_DIR/create_backup_${BK_LOG_TS}.log"
+
+    echo ""
+    echo "Step 3/3: Launching application tar backup in detached mode..."
+    nohup sh "$SCRIPT_DIR/oracle/create_backup.sh" > "$BK_LOG_FILE" 2>&1 &
+    local BK_PID=$!
+
+    echo ""
+    echo "=========================================="
+    echo "  Backup launched detached."
+    echo "  Backup PID : $BK_PID"
+    echo "  Log file   : $BK_LOG_FILE"
+    echo ""
+    echo "  Monitor progress with:"
+    echo "    tail -f $BK_LOG_FILE"
+    echo "=========================================="
 
     if ! restart_app_if_needed "successful flashback request completion"; then
         pause
@@ -223,7 +290,7 @@ make_flashback_request() {
     fi
 
     echo ""
-    echo "Make Flashback Request completed."
+    echo "Make Flashback Request completed. Backup is running in the background."
     pause
 }
 
@@ -445,6 +512,15 @@ EOF
     read -r -p "Final confirmation: type RESTORE to launch detached restore: " final_confirm
     if [ "$final_confirm" != "RESTORE" ]; then
         echo "Cancelled."
+        pause
+        return
+    fi
+
+    echo ""
+    echo "Validating APPS password before launching restore..."
+    if ! validate_apps_password; then
+        echo ""
+        echo "Restore aborted: password validation failed. Returning to menu."
         pause
         return
     fi
