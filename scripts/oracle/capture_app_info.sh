@@ -232,7 +232,13 @@ proc_count=$(normalize_count "$(count_app_processes || echo "999")")
 log "Application process count    : $proc_count"
 marker "END" "Application process count check"
 
-if [ "$proc_count" -gt 2 ]; then
+# When the menu has already handled the service-state decision and optionally
+# already stopped services, skip the interactive prompt entirely.
+SKIP_SERVICE_PROMPT="${FLASHBACK_SKIP_SERVICE_PROMPT:-false}"
+
+if [ "$SKIP_SERVICE_PROMPT" = "true" ]; then
+    log "Service prompt skipped (handled by calling workflow)."
+elif [ "$proc_count" -gt 2 ]; then
     echo ""
     printf "%s application-related processes are still running. Do you want to continue backup while services are running? (yes/no): " "$proc_count"
     read -r continue_choice

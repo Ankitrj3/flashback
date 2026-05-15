@@ -236,8 +236,83 @@ make_flashback_request() {
     read -r -p "Enter optional restore point suffix/name, blank for date default: " FLASHBACK_RESTORE_SUFFIX
     export FLASHBACK_RESTORE_SUFFIX
 
+    # --- Step 1: Count running application processes before anything else ---
     echo ""
-    echo "Step 1/3: Capturing application file-system and service status..."
+    echo "Step 1/3: Checking application service state..."
+    echo ""
+
+    local _proc_raw _proc_count
+    if [ -n "${FLASHBACK_APP_HOST:-}" ]; then
+        _proc_raw=$(ssh -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            "$FLASHBACK_SSH_USER@$FLASHBACK_APP_HOST" \
+            "ps -ef | grep -E 'FND|INV|frm|java|http|aporx' | grep -v -E 'bash|ssh|ps|grep' | wc -l" \
+            2>/dev/null | tr -d ' ') || _proc_raw=""
+    else
+        _proc_raw=$(ps -ef | grep -E 'FND|INV|frm|java|http|aporx' | grep -v -E 'bash|ssh|ps|grep' | wc -l \
+            2>/dev/null | tr -d ' ') || _proc_raw=""
+    fi
+    case "${_proc_raw:-}" in
+        ''|*[!0-9]*) _proc_count=999 ;;
+        *)            _proc_count="$_proc_raw" ;;
+    esac
+
+    echo "  Application process count : $_proc_count"
+    echo ""
+
+    # Default: tell capture_app_info.sh services are up, no shutdown
+    export FLASHBACK_SKIP_SERVICE_PROMPT=false
+    export FLASHBACK_FORCE_SHUTDOWN=false
+
+    if [ "$_proc_count" -gt 2 ]; then
+        echo "  $_proc_count application-related processes are currently running."
+        echo ""
+        read -r -p "  Continue backup WITH services running? (yes/no): " svc_choice
+
+        if [ "$svc_choice" = "yes" ]; then
+            # Proceed with services up — no password needed
+            echo ""
+            echo "  Proceeding with backup while services remain running."
+            export FLASHBACK_SKIP_SERVICE_PROMPT=true
+            export FLASHBACK_FORCE_SHUTDOWN=false
+        else
+            # User wants services shut down first — require password
+            echo ""
+            read -r -p "  Shut down application services before backup? (yes/no): " shutdown_choice
+            if [ "$shutdown_choice" != "yes" ]; then
+                echo "  Cancelled."
+                pause
+                return
+            fi
+
+            echo ""
+            echo "  Validating APPS password before stopping services..."
+            if ! validate_apps_password; then
+                echo ""
+                echo "  Aborted: password validation failed. No services have been touched."
+                pause
+                return
+            fi
+
+            echo ""
+            echo "  Stopping application services..."
+            if ! sh "$SCRIPT_DIR/oracle/stop_app_services.sh"; then
+                echo "ERROR: Application service shutdown failed."
+                pause
+                return
+            fi
+            # Tell capture_app_info.sh: services already stopped, skip its own prompt
+            export FLASHBACK_SKIP_SERVICE_PROMPT=true
+            export FLASHBACK_FORCE_SHUTDOWN=false
+            FLASHBACK_APP_STOPPED_BY_TOOL=true
+            persist_app_info
+        fi
+    else
+        echo "  Service count is within threshold — no active services detected."
+        export FLASHBACK_SKIP_SERVICE_PROMPT=true
+    fi
+
+    echo ""
+    echo "  Capturing application file-system paths and DB session state..."
     if ! sh "$SCRIPT_DIR/oracle/capture_app_info.sh"; then
         echo "ERROR: Application pre-check failed."
         pause
@@ -250,14 +325,6 @@ make_flashback_request() {
     if ! sh "$SCRIPT_DIR/oracle/create_flashback_restore_point.sh"; then
         restart_app_if_needed "restore point creation failure" || true
         echo "ERROR: DB restore point creation failed."
-        pause
-        return
-    fi
-
-    echo ""
-    echo "Step 3/3: Validating APPS password before launching backup..."
-    if ! validate_apps_password; then
-        restart_app_if_needed "backup pre-check failure" || true
         pause
         return
     fi
@@ -375,22 +442,41 @@ restore_flashback() {
     echo "=========================================="
     echo "           RESTORE FLASHBACK              "
     echo "=========================================="
-    echo "This will RESTORE the database and application filesystems to a previous flashback point."
+    echo "You are about to roll back the Oracle EBS environment to a previous snapshot."
+    echo "Please read each step carefully before confirming."
     echo ""
-    echo "WARNING: This is a DESTRUCTIVE operation."
-    echo "  - Application services will be stopped"
-    echo "  - Filesystem content will be overwritten from tar backups"
-    echo "  - Database will be flashed back to the selected restore point"
-    echo "  - Restore points will be dropped after successful flashback"
-    echo "  - Application services will be restarted"
+    echo "  What will happen (in order):"
     echo ""
-    echo "The restore runs DETACHED — your terminal will be freed immediately."
-    echo "All output is written to a log file you can tail at any time."
+    echo "  STEP 1  Your APPS password will be validated before anything is touched."
+    echo "  STEP 2  Application services will be shut down (adstpall.sh)."
+    echo "          The tool will wait until all EBS processes are fully gone."
+    echo "  STEP 3  You will choose the CDB and PDB restore points to flash back to."
+    echo "  STEP 4  You will choose the application tar backup date to restore from."
+    echo "  STEP 5  The restore launches in the background (detached)."
+    echo "          Your terminal is freed — the job runs unattended."
+    echo "  STEP 6  The restore script will:"
+    echo "            a) Roll back the database to the selected restore point."
+    echo "            b) Overwrite the application filesystems from the chosen tar backup."
+    echo "            c) Drop the restore points once the flashback succeeds."
+    echo "            d) Restart application services automatically."
     echo ""
+    echo "  All output is written to a dated log file you can tail at any time."
+    echo "  Track job progress via menu option 7 (View Backup / Restore Job Status)."
+    echo ""
+    echo "  !! This operation CANNOT be undone. Confirm only if you are sure. !!"
     echo ""
     read -r -p "Continue with Restore Flashback? Type YES: " confirm
     if [ "$confirm" != "YES" ]; then
         echo "Cancelled."
+        pause
+        return
+    fi
+
+    echo ""
+    echo "Validating APPS password before stopping services..."
+    if ! validate_apps_password; then
+        echo ""
+        echo "Restore aborted: password validation failed. Returning to menu."
         pause
         return
     fi
@@ -517,15 +603,6 @@ EOF
     fi
 
     echo ""
-    echo "Validating APPS password before launching restore..."
-    if ! validate_apps_password; then
-        echo ""
-        echo "Restore aborted: password validation failed. Returning to menu."
-        pause
-        return
-    fi
-
-    echo ""
     echo "  Launching restore in detached mode..."
     echo "  Log file: $LOG_FILE"
     echo "=========================================="
@@ -557,7 +634,7 @@ EOF
 view_restore_status() {
     clear
     echo "=========================================="
-    echo "         RESTORE PROCESS STATUS           "
+    echo "     BACKUP / RESTORE JOB STATUS          "
     echo "=========================================="
 
     if [ ! -f "$RESTORE_PID_FILE" ]; then
@@ -639,7 +716,7 @@ while true; do
     echo "4. Validate system ready for Load test"
     echo "5. Exit"
     echo "6. Delete stored config"
-    echo "7. View restore status"
+    echo "7. View Backup / Restore Job Status"
     echo "=========================================="
     read -r -p "Enter your choice [1-7]: " choice
 
