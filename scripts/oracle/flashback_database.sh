@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Flashback Oracle CDB and PDB to guaranteed restore points, then drop them.
+# Flashback Oracle CDB and PDB to guaranteed restore points.
 
 set -eu
 
@@ -165,17 +165,6 @@ EXIT;
 EOF
 log "PDB opened."
 
-log "Dropping restore points..."
-sqlplus -S /nolog <<EOF
-WHENEVER SQLERROR EXIT 1;
-CONNECT $CONNECT_CMD
-DROP RESTORE POINT "$CDB_RP_NAME";
-ALTER SESSION SET CONTAINER=$PDB_NAME;
-DROP RESTORE POINT "$PDB_RP_NAME";
-ALTER SESSION SET CONTAINER=CDB\$ROOT;
-EXIT;
-EOF
-log "Restore points dropped."
 
 log "Verifying database state..."
 sqlplus -S /nolog <<EOF

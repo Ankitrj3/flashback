@@ -60,19 +60,38 @@ marker() {
 }
 
 validate_apps_password() {
-    local apps_pass="${FLASHBACK_APPS_PASS:-}"
     local apps_user="${FLASHBACK_APPS_USER:-apps}"
     local db_host="${FLASHBACK_DB_HOST:-}"
     local pdb_name="${FLASHBACK_PDB_NAME:-}"
 
-    if [ -z "$apps_pass" ]; then
+    # If the password is not already configured, prompt for it now (hidden input).
+    if [ -z "${FLASHBACK_APPS_PASS:-}" ]; then
         echo ""
-        echo "ERROR: No APPS password is configured (FLASHBACK_APPS_PASS is empty)."
-        echo "       Run option 6 (Delete stored config) to reconfigure, or set the password."
-        return 1
+        printf "  Enter APPS password for user '%s': " "$apps_user"
+        local entered_pass
+        read -r -s entered_pass
+        echo ""
+        if [ -z "$entered_pass" ]; then
+            echo "ERROR: No password entered. Aborting."
+            return 1
+        fi
+        # Persist the password so it is available for this session and future runs.
+        FLASHBACK_APPS_PASS="$entered_pass"
+        export FLASHBACK_APPS_PASS
+        # Write it back to the env file so subsequent menu options can use it.
+        if [ -f "$ENV_FILE" ]; then
+            # Replace the existing empty FLASHBACK_APPS_PASS line in the env file.
+            local tmp_env
+            tmp_env=$(grep -v '^export FLASHBACK_APPS_PASS=' "$ENV_FILE" || true)
+            printf '%s\n' "$tmp_env" > "$ENV_FILE"
+            printf 'export FLASHBACK_APPS_PASS=%q\n' "$FLASHBACK_APPS_PASS" >> "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
+        fi
     fi
 
-    if ! command -v sqlplus >/dev/null 2>&1; then
+    local apps_pass="$FLASHBACK_APPS_PASS"
+
+    if ! command -v sqlplus > /dev/null 2>&1; then
         echo ""
         echo "ERROR: sqlplus not found. Cannot validate APPS password."
         return 1
@@ -101,6 +120,16 @@ EOF
         echo ""
         echo "ERROR: APPS password validation FAILED. Incorrect password or connection error."
         echo "       Operation aborted. Please verify FLASHBACK_APPS_PASS and retry."
+        # Clear the bad cached password so the user is prompted again next time.
+        FLASHBACK_APPS_PASS=""
+        export FLASHBACK_APPS_PASS
+        if [ -f "$ENV_FILE" ]; then
+            local tmp_env2
+            tmp_env2=$(grep -v '^export FLASHBACK_APPS_PASS=' "$ENV_FILE" || true)
+            printf '%s\n' "$tmp_env2" > "$ENV_FILE"
+            printf 'export FLASHBACK_APPS_PASS=%q\n' "" >> "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
+        fi
         return 1
     fi
 }
@@ -274,16 +303,8 @@ make_flashback_request() {
             echo "  Proceeding with backup while services remain running."
             export FLASHBACK_SKIP_SERVICE_PROMPT=true
             export FLASHBACK_FORCE_SHUTDOWN=false
-        else
-            # User wants services shut down first — require password
-            echo ""
-            read -r -p "  Shut down application services before backup? (yes/no): " shutdown_choice
-            if [ "$shutdown_choice" != "yes" ]; then
-                echo "  Cancelled."
-                pause
-                return
-            fi
-
+        elif [ "$svc_choice" = "no" ]; then
+            # User wants services shut down first — validate password then stop
             echo ""
             echo "  Validating APPS password before stopping services..."
             if ! validate_apps_password; then
@@ -305,6 +326,10 @@ make_flashback_request() {
             export FLASHBACK_FORCE_SHUTDOWN=false
             FLASHBACK_APP_STOPPED_BY_TOOL=true
             persist_app_info
+        else
+            echo "  Cancelled."
+            pause
+            return
         fi
     else
         echo "  Service count is within threshold — no active services detected."
@@ -337,7 +362,7 @@ make_flashback_request() {
     local BK_LOG_FILE="$BK_LOG_DIR/create_backup_${BK_LOG_TS}.log"
 
     echo ""
-    echo "Step 3/3: Launching application tar backup in detached mode..."
+    echo "Step 3/3: Starting application tar backup..."
     nohup sh "$SCRIPT_DIR/oracle/create_backup.sh" > "$BK_LOG_FILE" 2>&1 &
     local BK_PID=$!
 
@@ -449,16 +474,13 @@ restore_flashback() {
     echo ""
     echo "  STEP 1  Your APPS password will be validated before anything is touched."
     echo "  STEP 2  Application services will be shut down (adstpall.sh)."
-    echo "          The tool will wait until all EBS processes are fully gone."
     echo "  STEP 3  You will choose the CDB and PDB restore points to flash back to."
     echo "  STEP 4  You will choose the application tar backup date to restore from."
     echo "  STEP 5  The restore launches in the background (detached)."
-    echo "          Your terminal is freed — the job runs unattended."
     echo "  STEP 6  The restore script will:"
     echo "            a) Roll back the database to the selected restore point."
     echo "            b) Overwrite the application filesystems from the chosen tar backup."
-    echo "            c) Drop the restore points once the flashback succeeds."
-    echo "            d) Restart application services automatically."
+    echo "            c) Restart application services automatically."
     echo ""
     echo "  All output is written to a dated log file you can tail at any time."
     echo "  Track job progress via menu option 7 (View Backup / Restore Job Status)."
@@ -595,17 +617,12 @@ EOF
     echo "    PDB: $PDB_RP_NAME"
     echo "    App backup date tag: $FLASHBACK_RESTORE_DATE_TAG"
     echo ""
-    read -r -p "Final confirmation: type RESTORE to launch detached restore: " final_confirm
+    read -r -p "Final confirmation: type RESTORE to confirm: " final_confirm
     if [ "$final_confirm" != "RESTORE" ]; then
         echo "Cancelled."
         pause
         return
     fi
-
-    echo ""
-    echo "  Launching restore in detached mode..."
-    echo "  Log file: $LOG_FILE"
-    echo "=========================================="
 
     # --- Launch detached ---
     export FLASHBACK_CDB_RESTORE_POINT="$CDB_RP_NAME"
@@ -616,7 +633,7 @@ EOF
     nohup sh "$SCRIPT_DIR/oracle/restore_flashback.sh" > "$LOG_FILE" 2>&1 &
     local RESTORE_PID=$!
 
-    # Save PID and log path for status tracking (menu option 8).
+    # Save PID and log path for status tracking (menu option 7).
     printf '%s %s\n' "$RESTORE_PID" "$LOG_FILE" >> "$RESTORE_PID_FILE"
     chmod 600 "$RESTORE_PID_FILE"
 
@@ -704,6 +721,9 @@ validate_load_test_ready() {
 }
 
 load_or_prompt_config
+# Load persisted filesystem roles and app-state from the previous run so that
+# capture_app_info.sh can skip re-detection (including the operator fs1/fs2 prompt).
+reload_app_info
 
 while true; do
     clear

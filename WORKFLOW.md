@@ -8,346 +8,360 @@ The tool is centered on one interactive entrypoint:
 
 - `scripts/oracle_flashback_menu.sh`
 
-That menu collects configuration, calls worker scripts, and coordinates the four main operator workflows:
+That menu collects configuration, calls worker scripts, and coordinates four operator workflows accessible from a numbered menu:
 
-1. View flashback state
-2. Make flashback request
-3. Restore flashback
-4. Validate load-test readiness
+| Option | Name |
+|---|---|
+| 1 | View Flashback |
+| 2 | Make Flashback Request |
+| 3 | Restore Flashback |
+| 4 | Validate System Ready for Load Test |
+| 5 | Exit |
+| 6 | Delete Stored Config |
+| 7 | View Backup / Restore Job Status |
 
-The rest of the scripts under `scripts/oracle/` are focused workers. Each one handles a specific part of the automation.
+All worker scripts live under `scripts/oracle/`.
+
+---
 
 ## End-to-End Product Flow
 
-### 1. Environment setup
+### Startup
 
 When the menu starts, it:
 
-- Loads saved values from `~/.flashback_env` if present.
-- Attempts database-side auto-detection through `detect_environment.sh`.
-- Prompts for missing application-side details such as app host, SSH user, app base directory, and backup directory.
-- Saves the resolved configuration back to `~/.flashback_env`.
+1. Loads saved configuration from `~/.flashback_env` if it exists.
+2. Attempts DB-side auto-detection via `detect_environment.sh` (instance ID, PDB name, alert log path).
+3. Prompts for missing application-side values (app host, SSH user, app base directory, backup directory).
+4. Saves the resolved configuration back to `~/.flashback_env`.
+5. Loads previously persisted filesystem role metadata from `~/.flashback_app_info` (if available). This prevents re-detection or re-prompting of RUN/PATCH roles on subsequent sessions.
 
-### 2. View flashback
+---
 
-This workflow shows the current flashback picture without changing state:
+### Option 1 — View Flashback
 
-- Database guaranteed restore points
-- Application tar backup files
-- Flashback restore history from the Oracle alert log
+Read-only. No state changes.
 
-### 3. Make flashback request
+What it shows:
+- All current `V$RESTORE_POINT` entries (name, time, guaranteed flag, storage size, PDB, CON_ID)
+- Application tar backup files matching `${INSTANCE_ID}_*_backup_*.tar` in the backup directory
+- Flashback restore history from the Oracle alert log (grep for `Flashback restore`)
 
-This is the preparation workflow before load testing or another reversible activity.
+---
 
-It performs these stages:
+### Option 2 — Make Flashback Request
 
-1. Checks application processes and optionally stops services if the operator chooses that path.
-2. Detects and saves RUN, PATCH, and non-editioned filesystem paths.
-3. Verifies required application paths exist.
-4. Optionally checks current database application session count.
-5. Creates CDB and PDB guaranteed restore points.
-6. Launches tar backups for `fs_ne`, `fs1`, and `fs2`.
-7. Restarts application services only if this workflow stopped them earlier.
+This is the preparation workflow. It runs in three stages.
 
-### 4. Restore flashback
+#### Stage 1 — Application Service Check
 
-This is the recovery workflow.
+1. Counts running EBS-related processes (FND, INV, Forms, Java, HTTP, aporx).
+2. Asks the operator: **"Continue backup WITH services running? (yes/no)"**
+   - **yes** → proceeds without stopping services; no password required.
+   - **no** → prompts for APPS password (silent input), validates against DB, then stops services using `stop_app_services.sh`. After successful stop, sets `FLASHBACK_APP_STOPPED_BY_TOOL=true` in `~/.flashback_app_info`.
+   - anything else → cancelled, returns to menu.
+3. Calls `capture_app_info.sh` to detect FS roles and verify paths.
 
-It performs these stages:
+#### Stage 2 — Create DB Restore Points
 
-1. Stops application services.
-2. Shows a database application session report.
-3. Queries available restore points and asks the operator to select or enter them.
-4. Lists available backup tar files and asks for the backup date tag to restore.
-5. Launches `restore_flashback.sh` in detached mode and writes a timestamped log file under `logs/`.
+Calls `create_flashback_restore_point.sh`:
+- Verifies `ARCHIVELOG` mode and `FLASHBACK_ON=YES`.
+- Creates CDB guaranteed restore point named `{INSTANCE_ID}_CDB_flashback_restore_{DDMonYY_HHmm}`.
+- Creates PDB guaranteed restore point named `{INSTANCE_ID}_PDB_flashback_restore_{DDMonYY_HHmm}`.
+- The `_HHmm` suffix prevents name collisions when multiple requests are made on the same day.
+- If sqlplus fails (ORA- error), the full error output is displayed with diagnostic hints.
 
-The detached restore script then:
+#### Stage 3 — Launch Tar Backups
 
-1. Restores application filesystems from tar backups.
-2. Flashes back the PDB and CDB to the chosen restore points.
-3. Drops the used restore points.
-4. Starts application services.
-5. Writes a summary and leaves a log trail for status tracking.
+Calls `create_backup.sh` via `nohup` in the background:
+- Backs up `fs_ne`, `fs1`, and `fs2` relative to `APP_BASE_DIR`.
+- Names archives: `{INSTANCE_ID}_{fs_label}_backup_{DDMonYY}.tar`
+- Writes per-filesystem `.log` files in the backup directory.
+- The menu returns to the operator immediately; backup continues unattended.
 
-### 5. Validate load-test readiness
+If the tool stopped services in Stage 1, it restarts them via `start_app_services.sh` before returning to the menu.
 
-This workflow checks whether the restored or prepared system looks ready for testing.
+---
 
-It validates:
+### Option 3 — Restore Flashback
 
-- Application base directory reachability
-- Application process count
-- RUN, PATCH, and non-editioned filesystem paths
-- Free space
-- Configured application URLs
-- Database and PDB open mode
-- Invalid objects
-- Blocking sessions
-- Recent alert-log errors
+This is the recovery workflow. It runs **foreground** up to the final confirmation, then launches detached.
 
-## Menu Script
+#### Foreground Steps
+
+1. **Confirm** — Operator types `YES` to proceed.
+2. **Password validation** — APPS password prompted silently if not already configured. Validated via sqlplus. If wrong, the cached password is cleared and the operator is returned to the menu.
+3. **Stop services** — Calls `stop_app_services.sh`. Waits up to **20 minutes** for all EBS processes to stop.
+4. **DB session report** — Shows non-background session counts by program/module.
+5. **Select restore point** — Queries `V$RESTORE_POINT`, presents a numbered list, operator picks CDB and PDB restore points separately.
+6. **Select backup date tag** — Lists available tar files and asks for the backup date tag to restore from.
+7. **Final confirm** — Operator types `RESTORE` to launch.
+
+#### Detached Restore (`restore_flashback.sh`)
+
+Runs under `nohup` with all output written to `logs/restore_flashback_{timestamp}.log`.
+
+Steps:
+1. **Restore application filesystems** (`restore_backup.sh`)
+   - Checks free space (minimum 250 GB by default).
+   - Renames existing `fs_ne`, `fs1`, `fs2` aside with a timestamp (safety net, not deletion).
+   - Extracts tar archives for all three filesystems in parallel.
+   - Waits for all tar jobs to complete before continuing.
+2. **Flash back database** (`flashback_database.sh`)
+   - Verifies both restore points still exist.
+   - Handles RAC: sets `cluster_database=FALSE`, stops via `srvctl`, restarts single-instance.
+   - Flashes back the PDB.
+   - Flashes back the CDB (requires `MOUNT` mode via `SHUTDOWN IMMEDIATE` + `STARTUP MOUNT`).
+   - Opens PDB and CDB with `RESETLOGS`.
+   - **Restore points are NOT dropped** — they remain available for review (Option 1).
+   - Verifies final database open mode and PDB state.
+3. **Start application services** (`start_app_services.sh`)
+   - Locates `adstrtal.sh`, runs it.
+   - Waits up to 10 minutes (20 × 30 s) for EBS processes to appear.
+4. **Restore summary** — Logs CDB/PDB restore points used, filesystem restore status, and service start status.
+
+PID and log path recorded in `~/.flashback_restore_pid` for Option 7 status tracking.
+
+---
+
+### Option 4 — Validate System Ready for Load Test
+
+Runs `validate_load_test_ready.sh`. Each check is recorded as PASS / WARN / FAIL.
+
+| Check | Pass condition |
+|---|---|
+| Application base directory reachable | Directory exists via SSH or local |
+| Application process count | ≥ `FLASHBACK_LOAD_TEST_MIN_APP_PROCESSES` (default 3) |
+| RUN, PATCH, NE filesystem paths | All three directories exist |
+| Free space | ≥ `FLASHBACK_LOAD_TEST_MIN_FREE_GB` GB (default 50) |
+| Configured URLs (if set) | HTTP 2xx or 3xx response |
+| Database open mode | `READ WRITE` |
+| PDB open mode | `READ WRITE` |
+| Invalid objects | 0 invalid objects (warn if > 0) |
+| Blocking sessions | 0 blocking sessions |
+| Alert log scan | No ORA-/TNS-/error entries in last 300 lines (warn if found) |
+
+Exits 1 if any FAIL. Exits 0 with warning summary if only WARNs.
+
+---
+
+### Option 6 — Delete Stored Config
+
+Removes `~/.flashback_env`. The next menu interaction will prompt for all configuration from scratch.
+
+> To reset filesystem role detection only (without clearing all config), manually delete `~/.flashback_app_info` on the server.
+
+---
+
+### Option 7 — View Backup / Restore Job Status
+
+Reads `~/.flashback_restore_pid` and shows:
+- PID of each launched restore job
+- Status: RUNNING or DONE (based on whether the PID still exists)
+- Last 15 lines of the most recent restore log
+
+---
+
+## Script Reference
 
 ### `scripts/oracle_flashback_menu.sh`
 
-This is the operator-facing controller.
+The operator-facing controller and only interactive entrypoint.
 
 Responsibilities:
+- Load and save configuration (`~/.flashback_env`, `~/.flashback_app_info`)
+- Display the numbered interactive menu
+- Orchestrate the service-check and password-validation flow for Options 2 and 3
+- Call worker scripts for each workflow step
+- Restart application services when the request flow stopped them
+- Collect restore-point and backup-tag selections interactively (foreground)
+- Launch detached restore and track its PID/log
 
-- Loads and saves configuration
-- Displays the interactive menu
-- Calls the correct worker script for each menu option
-- Restarts application services after `Make flashback request` only when that request flow stopped them
-- Collects restore-point and backup-tag choices during restore
-- Starts detached restore execution
-- Tracks detached restore PIDs and log files
+Key functions:
 
-Key artifacts managed here:
+| Function | Purpose |
+|---|---|
+| `load_or_prompt_config` | Load env file; detect or prompt for all config values; save to env file |
+| `reload_app_info` | Source `~/.flashback_app_info`; export FS roles and stop-state flag |
+| `persist_app_info` | Write current FS roles and stop-state flag to `~/.flashback_app_info` |
+| `validate_apps_password` | Prompt for password silently if not set; validate via sqlplus; cache or clear on result |
+| `make_flashback_request` | Option 2 orchestrator |
+| `restore_flashback` | Option 3 foreground orchestrator |
+| `view_restore_status` | Option 7 status display |
 
-- `~/.flashback_env`
-- `~/.flashback_app_info`
-- `~/.flashback_restore_pid`
-
-## Worker Scripts
+---
 
 ### `scripts/oracle/detect_environment.sh`
 
-Purpose:
+Queries `/ as sysdba` for:
+- Instance name (`INSTANCE_ID`)
+- DB host (`DB_HOST`)
+- Alert log path (`ALERT_LOG`)
+- Default read-write PDB (`PDB_NAME`)
 
-- Queries Oracle for the DB name, DB host, alert log path, and a default read-write PDB.
+Output is a set of `KEY="value"` lines parsed by the menu.
 
-Used by:
-
-- `oracle_flashback_menu.sh`
-
-### `scripts/oracle/view_flashback.sh`
-
-Purpose:
-
-- Implements the `View Flashback` option.
-
-What it does:
-
-- Calls `list_restore_points.sh`
-- Lists application tar files from the backup directory
-- Searches the alert log for flashback restore history
-
-### `scripts/oracle/list_restore_points.sh`
-
-Purpose:
-
-- Queries `V$RESTORE_POINT` and prints current restore points.
-
-Used by:
-
-- `view_flashback.sh`
-- `restore_flashback.sh`
+---
 
 ### `scripts/oracle/capture_app_info.sh`
 
-Purpose:
+Runs during Make Flashback Request (Stage 1).
 
-- Prepares the application-side context before backup.
+Key behaviour:
+- If `FLASHBACK_RUN_FS` and `FLASHBACK_PATCH_FS` are already exported (from a previous session's `~/.flashback_app_info`), **skips detection entirely** and uses the persisted values.
+- Otherwise tries: XML `s_file_edition_type` → `EBSapps.env` symlink → interactive operator prompt.
+- Confirmed/detected roles are saved to `~/.flashback_app_info` and persist across sessions.
+- The service-state decision is controlled by `FLASHBACK_SKIP_SERVICE_PROMPT` exported by the menu; the script never asks for shutdown independently when the menu has already handled it.
 
-What it does:
-
-- Counts application processes
-- Lets the operator choose whether to continue while services are up or stop them first
-- Detects RUN and PATCH filesystem roles from EBS context XML when possible
-- Verifies application filesystem paths
-- Optionally checks database application sessions
-- Writes filesystem metadata and stop-state metadata to `~/.flashback_app_info`
+---
 
 ### `scripts/oracle/create_flashback_restore_point.sh`
 
-Purpose:
+Creates guaranteed restore points. Key details:
+- Verifies `ARCHIVELOG` and `FLASHBACK_ON=YES` before issuing any DDL.
+- Uses `set +e` around the CREATE sqlplus call so ORA- errors are always captured and printed to the operator before the script exits.
+- If sqlplus fails, diagnostic hints are shown (ORA-38778 = name exists, ORA-01031 = privileges, ORA-01261 = FRA space).
+- Default naming: `{INSTANCE_ID}_CDB_flashback_restore_{DDMonYY_HHmm}` — the `_HHmm` prevents same-day collisions.
 
-- Creates the guaranteed restore points used later for recovery.
-
-What it does:
-
-- Verifies the database is in `ARCHIVELOG`
-- Verifies `FLASHBACK_ON=YES`
-- Creates a CDB guaranteed restore point
-- Switches to the target PDB and creates a PDB guaranteed restore point
-- Verifies both restore points were created successfully
+---
 
 ### `scripts/oracle/create_backup.sh`
 
-Purpose:
+Launches background tar jobs. Key details:
+- Supports local and remote (SSH) application nodes.
+- Verifies backup directory is writable and app base directory exists before starting.
+- Tar jobs run under `nohup` on the application node; the script exits after launching them.
 
-- Starts application filesystem tar backups.
-
-What it does:
-
-- Validates backup directory and application base path
-- Works locally or through SSH to remote application nodes
-- Builds tar file names using the instance ID and date tag
-- Starts backup jobs for `fs_ne`, `fs1`, and `fs2`
+---
 
 ### `scripts/oracle/stop_app_services.sh`
 
-Purpose:
+Stops EBS services. Key details:
+- Counts processes, skips if already zero.
+- Locates `adstpall.sh` under `APP_BASE_DIR` if not on PATH.
+- Pipes credentials (APPS user/password, WebLogic password) to stdin.
+- Waits up to **20 minutes** (40 × 30 s) for all EBS processes to stop.
+- Exits 1 if processes are still running after timeout.
 
-- Stops Oracle EBS application services before restore or when backup requires it.
-
-What it does:
-
-- Counts running application processes
-- Prompts for APPS and WebLogic credentials when needed
-- Locates `adstpall.sh` or the configured stop command
-- Runs the stop command
-- Waits until application processes go down
+---
 
 ### `scripts/oracle/restore_flashback.sh`
 
-Purpose:
+Detached restore orchestrator. Runs fully non-interactive. Calls:
 
-- Orchestrates the detached restore flow.
+1. `restore_backup.sh` — filesystem restore
+2. `flashback_database.sh` — DB flashback
+3. `start_app_services.sh` — service restart
 
-What it does:
+All output goes to `logs/restore_flashback_{timestamp}.log`.
 
-- Uses the selected restore-point names and backup date tag
-- Stops services if the menu did not already do it
-- Calls `restore_backup.sh`
-- Calls `flashback_database.sh`
-- Calls `start_app_services.sh`
-- Writes summary markers and final status to the restore log
+---
 
 ### `scripts/oracle/restore_backup.sh`
 
-Purpose:
+Restores application filesystems. Key details:
+- Detects latest backup date tag automatically if not provided.
+- Checks minimum free space (`FLASHBACK_MIN_RESTORE_FREE_GB`, default 250 GB).
+- Renames existing directories aside (e.g. `fs1` → `fs1_run_20260515_113300`). **Does not delete anything.**
+- Runs all three tar extract jobs in parallel with `nohup`, then `wait`s for all to complete.
 
-- Restores application filesystems from backup tar files.
-
-What it does:
-
-- Detects the latest backup date tag when one is not provided
-- Checks free space
-- Renames existing filesystems aside with a timestamp suffix
-- Extracts tar files for `fs_ne`, `fs1`, and `fs2`
-- Waits for restore jobs to complete
+---
 
 ### `scripts/oracle/flashback_database.sh`
 
-Purpose:
+Flashes back CDB and PDB. Key details:
+- Verifies both restore points exist before touching the database.
+- RAC-aware: sets `cluster_database=FALSE` via SPFILE, stops all instances via `srvctl`, starts single-instance for flashback.
+- Flashes back PDB first (CLOSE IMMEDIATE → FLASHBACK → OPEN RESETLOGS).
+- Flashes back CDB (SHUTDOWN IMMEDIATE → STARTUP MOUNT → FLASHBACK → OPEN RESETLOGS).
+- Opens PDB after CDB flashback.
+- **Restore points are NOT dropped** — they remain in `V$RESTORE_POINT` after the operation.
+- Verifies final database and PDB open mode before exiting.
+- After RAC flashback: restores `cluster_database=TRUE` and restarts via `srvctl`.
 
-- Flashes back the database to the selected restore points and then cleans up.
-
-What it does:
-
-- Verifies the restore points exist
-- Handles RAC precheck logic through `cluster_database`
-- Flashes back the PDB
-- Flashes back the CDB
-- Opens the PDB
-- Drops the restore points
-- Verifies final database state
+---
 
 ### `scripts/oracle/start_app_services.sh`
 
-Purpose:
+Starts EBS services. Key details:
+- Locates `adstrtal.sh` under `APP_BASE_DIR` if not on PATH.
+- Pipes credentials to stdin.
+- Waits up to 10 minutes (20 × 30 s) for processes to appear.
+- Exits 1 with a WARNING (not a hard failure) if no processes are detected — restore continues.
 
-- Starts Oracle EBS application services after restore.
-
-What it does:
-
-- Prompts for APPS and WebLogic credentials when needed
-- Locates `adstrtal.sh` or the configured start command
-- Runs the start command
-- Waits until application processes appear
+---
 
 ### `scripts/oracle/validate_load_test_ready.sh`
 
-Purpose:
+Post-restore readiness validation. Records each check as PASS / WARN / FAIL. Exits 1 if any check FAILs.
 
-- Performs readiness checks after restore or preparation.
+---
 
-What it does:
+## Filesystem Role Persistence
 
-- Checks application base directory and filesystem paths
-- Checks process count
-- Checks free space
-- Checks configured URLs if provided
-- Checks database and PDB open mode
-- Reports invalid objects and blocking sessions
-- Scans recent alert-log lines for errors
+RUN/PATCH/NE filesystem paths are detected once and cached in `~/.flashback_app_info`. On every subsequent run — including new SSH sessions — those cached values are loaded at menu startup and passed to `capture_app_info.sh`, which skips all detection methods when the values are already available.
 
-## Files Written During Execution
+Detection priority:
+1. Values in `~/.flashback_app_info` (loaded at startup by `reload_app_info`)
+2. EBS context XML (`s_file_edition_type` attribute)
+3. `EBSapps.env` symlink target
+4. Interactive operator prompt (stored after confirmation)
 
-### `~/.flashback_env`
+---
 
-Saved operator configuration such as:
+## APPS Password Handling
 
-- DB and PDB values
-- app host and SSH user
-- application base directory
-- backup directory
-- alert log path
+The APPS password is **never prompted at config time**. It is collected silently (using `read -s`) on first use of Option 2 or Option 3, validated via sqlplus, and then persisted to `~/.flashback_env`. If validation fails, the cached password is cleared so the operator is re-prompted on the next attempt.
 
-### `~/.flashback_app_info`
-
-Saved application filesystem metadata:
-
-- `FLASHBACK_RUN_FS`
-- `FLASHBACK_PATCH_FS`
-- `FLASHBACK_NE_FS`
-- `FLASHBACK_APP_STOPPED_BY_TOOL`
-
-### `~/.flashback_restore_pid`
-
-Used by the menu to track:
-
-- Detached restore PID
-- Restore log file path
-
-### `logs/restore_flashback_<timestamp>.log`
-
-Full restore execution log for detached restore runs.
+---
 
 ## Logging Model
 
-The scripts now use operation markers instead of timestamping every line.
+Each script writes to a shared log file (`logs/flashback_execution.log`) and to a per-run log for detached operations.
 
-Typical pattern:
+All major operations are bracketed with START/END markers:
 
-```text
-[START] <Operation> : <timestamp>
+```
+[START] Operation name : YYYY-MM-DD HH:MM:SS
 ...
-[END] <Operation> : <timestamp>
+[END] Operation name : YYYY-MM-DD HH:MM:SS
 ```
 
-This keeps output readable while still showing when major operations started and ended.
+Detached restore operations write to a separate timestamped log:
+```
+logs/restore_flashback_YYYYMMDD_HHMMSS.log
+```
+
+---
 
 ## Failure Model
 
-The scripts are built to stop on failed prerequisites or failed critical actions.
+Scripts use `set -eu` (exit on error, unset variable). The following conditions cause hard exits:
 
-Examples:
+| Condition | Script | Exit code |
+|---|---|---|
+| `sqlplus` not on PATH | multiple | 3 |
+| DB not in ARCHIVELOG | create_flashback_restore_point | 3 |
+| FLASHBACK_ON ≠ YES | create_flashback_restore_point | 3 |
+| sqlplus ORA- error during CREATE RESTORE POINT | create_flashback_restore_point | 1 |
+| Restore point not found in V$RESTORE_POINT | flashback_database | 1 |
+| Application stop timeout | stop_app_services | 1 |
+| Tar restore failure | restore_backup | 1 |
+| Insufficient free space | restore_backup | 1 |
+| App base directory missing | restore_backup | 3 |
 
-- Missing `sqlplus`
-- Missing restore points
-- Backup directory not writable
-- Application base directory not found
-- Flashback prerequisites not enabled
-- Tar restore failure
-- Application stop failure
+Where a failure can be logged as a warning without blocking the workflow, scripts use `record_warn` (validate_load_test_ready) or `|| true` with explicit log messages.
 
-Where the workflow can safely continue with operator awareness, the scripts log warnings instead of exiting immediately.
+---
 
 ## Suggested Operational Sequence
 
-Typical operator usage:
-
-1. Start the menu.
-2. Confirm saved or detected environment values.
-3. Run `Make flashback request`.
-4. Perform the external activity that may need rollback.
-5. Run `Restore flashback` if rollback is required.
-6. Run `Validate system ready for Load test` after restore or handoff preparation.
-
-## Notes
-
-- This automation assumes the DB host can reach the application node over SSH.
-- It assumes Oracle authentication and EBS service control are already aligned with the target environment.
-- Because restore changes both database and filesystem state, operator confirmation is intentionally required before destructive actions begin.
+```
+1. Start the menu on the DB server.
+2. Confirm or update environment values.
+3. Option 2 — Make Flashback Request  (before any reversible activity)
+4. Perform the external load test or change.
+5. Option 3 — Restore Flashback  (if rollback is required)
+6. Option 4 — Validate system ready for Load Test  (after restore)
+7. Option 1 — View Flashback  (to confirm restore points still exist)
+```

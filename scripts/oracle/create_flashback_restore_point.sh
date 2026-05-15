@@ -24,7 +24,8 @@ PDB_NAME="${FLASHBACK_PDB_NAME:-$INSTANCE_ID}"
 ORACLE_ENV="${FLASHBACK_ORACLE_ENV:-}"
 RESTORE_SUFFIX="${FLASHBACK_RESTORE_SUFFIX:-}"
 # Client runbook format, preserving the date command's natural month case.
-DATE_TAG=$(date '+%d%b%y')
+# Hour+minute suffix ensures uniqueness when multiple RPs are created on the same day.
+DATE_TAG=$(date '+%d%b%y_%H%M')
 
 if [ -n "$RESTORE_SUFFIX" ]; then
     CDB_RP_NAME="${INSTANCE_ID}_CDB_${RESTORE_SUFFIX}"
@@ -89,6 +90,9 @@ if ! echo "$precheck_result" | grep -q "FLASHBACK_ON=YES"; then
 fi
 
 marker "START" "Create CDB/PDB restore points"
+# Temporarily disable errexit so that a sqlplus ORA- error does not silently
+# kill the script before we can echo the error output to the operator.
+set +e
 result=$(sqlplus -S /nolog <<EOF
 WHENEVER SQLERROR EXIT 1;
 CONNECT $CONNECT_CMD
@@ -119,9 +123,21 @@ ORDER BY TIME;
 EXIT;
 EOF
 )
+sqlplus_rc=$?
+set -e
 marker "END" "Create CDB/PDB restore points"
 
+# Always print sqlplus output so operator can see any ORA- error details.
 echo "$result"
+
+if [ "$sqlplus_rc" -ne 0 ]; then
+    log "ERROR: sqlplus exited with code $sqlplus_rc during restore point creation."
+    log "       Check the ORA- error above. Common causes:"
+    log "       ORA-38778 : restore point name already exists (run again, name is now time-stamped)"
+    log "       ORA-01031 : insufficient privileges (connect as sysdba required)"
+    log "       ORA-01261 : flash recovery area issue"
+    exit 1
+fi
 
 marker "START" "Verify restore points"
 if ! echo "$result" | grep -q "$CDB_RP_NAME"; then

@@ -89,7 +89,9 @@ run_shutdown() {
 }
 
 wait_for_processes_down() {
-    tries=10
+    # Allow up to 20 minutes (40 tries × 30 s) for EBS processes to fully stop.
+    # Large EBS environments with JVM, Forms, and OAF processes can take 10-15 min.
+    tries=40
     while [ "$tries" -gt 0 ]; do
         remaining=$(normalize_count "$(count_app_processes || echo "999")")
         log "Remaining application process count: $remaining"
@@ -97,7 +99,7 @@ wait_for_processes_down() {
             return 0
         fi
         tries=$((tries - 1))
-        sleep 15
+        sleep 30
     done
     return 1
 }
