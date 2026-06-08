@@ -34,7 +34,7 @@ When the menu starts, it:
 2. Attempts DB-side auto-detection via `detect_environment.sh` (instance ID, PDB name, alert log path).
 3. Prompts for missing application-side values (app host, SSH user, app base directory, backup directory).
 4. Saves the resolved configuration back to `~/.flashback_env`.
-5. Loads previously persisted filesystem role metadata from `~/.flashback_app_info` (if available). This prevents re-detection or re-prompting of RUN/PATCH roles on subsequent sessions.
+5. Loads previously persisted filesystem role metadata from `~/.flashback_app_info` (if available). This preserves RUN/PATCH labels and stop-state across menu actions and subsequent sessions.
 
 ---
 
@@ -73,13 +73,14 @@ Calls `create_flashback_restore_point.sh`:
 
 #### Stage 3 — Launch Tar Backups
 
-Calls `create_backup.sh` via `nohup` in the background:
+Calls `create_backup.sh` via `nohup`:
 - Backs up `fs_ne`, `fs1`, and `fs2` relative to `APP_BASE_DIR`.
 - Names archives: `{INSTANCE_ID}_{fs_label}_backup_{DDMonYY}.tar`
 - Writes per-filesystem `.log` files in the backup directory.
-- The menu returns to the operator immediately; backup continues unattended.
+- If services stayed up, the menu returns immediately and backup continues unattended.
+- If the tool stopped services, the menu waits for the backup to finish, then restarts services before returning.
 
-If the tool stopped services in Stage 1, it restarts them via `start_app_services.sh` before returning to the menu.
+The backup PID and log path are recorded for Option 7 status tracking.
 
 ---
 
@@ -102,12 +103,7 @@ This is the recovery workflow. It runs **foreground** up to the final confirmati
 Runs under `nohup` with all output written to `logs/restore_flashback_{timestamp}.log`.
 
 Steps:
-1. **Restore application filesystems** (`restore_backup.sh`)
-   - Checks free space (minimum 250 GB by default).
-   - Renames existing `fs_ne`, `fs1`, `fs2` aside with a timestamp (safety net, not deletion).
-   - Extracts tar archives for all three filesystems in parallel.
-   - Waits for all tar jobs to complete before continuing.
-2. **Flash back database** (`flashback_database.sh`)
+1. **Flash back database** (`flashback_database.sh`)
    - Verifies both restore points still exist.
    - Handles RAC: sets `cluster_database=FALSE`, stops via `srvctl`, restarts single-instance.
    - Flashes back the PDB.
@@ -115,6 +111,11 @@ Steps:
    - Opens PDB and CDB with `RESETLOGS`.
    - **Restore points are NOT dropped** — they remain available for review (Option 1).
    - Verifies final database open mode and PDB state.
+2. **Restore application filesystems** (`restore_backup.sh`)
+   - Checks free space (minimum 250 GB by default).
+   - Renames existing `fs_ne`, `fs1`, `fs2` aside with a timestamp (safety net, not deletion).
+   - Extracts tar archives for all three filesystems in parallel.
+   - Waits for all tar jobs to complete before continuing.
 3. **Start application services** (`start_app_services.sh`)
    - Locates `adstrtal.sh`, runs it.
    - Waits up to 10 minutes (20 × 30 s) for EBS processes to appear.
@@ -156,9 +157,9 @@ Removes `~/.flashback_env`. The next menu interaction will prompt for all config
 ### Option 7 — View Backup / Restore Job Status
 
 Reads `~/.flashback_restore_pid` and shows:
-- PID of each launched restore job
+- Type and PID of each launched backup/restore job
 - Status: RUNNING or DONE (based on whether the PID still exists)
-- Last 15 lines of the most recent restore log
+- Last 15 lines of the most recent job log
 
 ---
 
@@ -230,7 +231,7 @@ Creates guaranteed restore points. Key details:
 Launches background tar jobs. Key details:
 - Supports local and remote (SSH) application nodes.
 - Verifies backup directory is writable and app base directory exists before starting.
-- Tar jobs run under `nohup` on the application node; the script exits after launching them.
+- Tar jobs run in parallel and the script waits for all of them. The menu may run this script under `nohup` so the operator can return while services remain up.
 
 ---
 
@@ -249,8 +250,8 @@ Stops EBS services. Key details:
 
 Detached restore orchestrator. Runs fully non-interactive. Calls:
 
-1. `restore_backup.sh` — filesystem restore
-2. `flashback_database.sh` — DB flashback
+1. `flashback_database.sh` — DB flashback
+2. `restore_backup.sh` — filesystem restore
 3. `start_app_services.sh` — service restart
 
 All output goes to `logs/restore_flashback_{timestamp}.log`.

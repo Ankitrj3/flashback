@@ -19,6 +19,7 @@ reload_app_info() {
         export FLASHBACK_RUN_FS FLASHBACK_PATCH_FS FLASHBACK_NE_FS FLASHBACK_APP_STOPPED_BY_TOOL
     else
         FLASHBACK_APP_STOPPED_BY_TOOL=false
+        export FLASHBACK_APP_STOPPED_BY_TOOL
     fi
 }
 
@@ -364,14 +365,40 @@ make_flashback_request() {
     echo ""
     echo "Step 3/3: Starting application tar backup..."
     nohup sh "$SCRIPT_DIR/oracle/create_backup.sh" > "$BK_LOG_FILE" 2>&1 &
+    local BK_PID=$!
+    printf 'BACKUP %s %s\n' "$BK_PID" "$BK_LOG_FILE" >> "$RESTORE_PID_FILE"
+    chmod 600 "$RESTORE_PID_FILE"
+
+    local backup_failed=0
+    local backup_waited=false
+    if [ "${FLASHBACK_APP_STOPPED_BY_TOOL:-false}" = "true" ]; then
+        backup_waited=true
+        echo ""
+        echo "Application services were stopped by this workflow."
+        echo "Waiting for backup to finish before restarting services..."
+        if ! wait "$BK_PID"; then
+            backup_failed=1
+            echo "ERROR: Application tar backup failed. Check log: $BK_LOG_FILE"
+        fi
+    fi
 
     if ! restart_app_if_needed "successful flashback request completion"; then
         pause
         return
     fi
 
+    if [ "$backup_failed" -ne 0 ]; then
+        pause
+        return
+    fi
+
     echo ""
-    echo "Make Flashback Request completed. Backup is running in the background."
+    if [ "$backup_waited" = "true" ]; then
+        echo "Make Flashback Request completed. Backup finished and services were restarted."
+    else
+        echo "Make Flashback Request completed. Backup is running in the background."
+    fi
+    echo "Backup PID: $BK_PID"
     pause
 }
 
@@ -468,7 +495,7 @@ restore_flashback() {
     echo "  STEP 5  The restore launches in the background (detached)."
     echo "  STEP 6  The restore script will:"
     echo "            a) Roll back the database to the selected restore point."
-    echo "            b) Overwrite the application filesystems from the chosen tar backup."
+    echo "            b) Restore the application filesystems from the chosen tar backup."
     echo "            c) Restart application services automatically."
     echo ""
     echo "  All output is written to a dated log file you can tail at any time."
@@ -576,7 +603,7 @@ EOF
         echo ""
 
         local DATE_TAG_DEFAULT
-        DATE_TAG_DEFAULT=$(date '+%d%b%y')
+        DATE_TAG_DEFAULT=$(date '+%d%b%y_%H%M')
         local CDB_RP_DEFAULT="${FLASHBACK_INSTANCE_ID}_CDB_flashback_restore_${DATE_TAG_DEFAULT}"
         local PDB_RP_DEFAULT="${FLASHBACK_INSTANCE_ID}_PDB_flashback_restore_${DATE_TAG_DEFAULT}"
 
@@ -623,7 +650,7 @@ EOF
     local RESTORE_PID=$!
 
     # Save PID and log path for status tracking (menu option 7).
-    printf '%s %s\n' "$RESTORE_PID" "$LOG_FILE" >> "$RESTORE_PID_FILE"
+    printf 'RESTORE %s %s\n' "$RESTORE_PID" "$LOG_FILE" >> "$RESTORE_PID_FILE"
     chmod 600 "$RESTORE_PID_FILE"
 
     echo ""
@@ -638,16 +665,29 @@ view_restore_status() {
     echo "=========================================="
 
     if [ ! -f "$RESTORE_PID_FILE" ]; then
-        echo "No restore processes have been launched yet."
+        echo "No backup or restore processes have been launched yet."
         pause
         return
     fi
 
     echo ""
-    printf "  %-8s  %-10s  %s\n" "PID" "STATUS" "LOG FILE"
-    echo "  ------   --------   ------------------------------------------"
+    printf "  %-8s  %-8s  %-10s  %s\n" "TYPE" "PID" "STATUS" "LOG FILE"
+    echo "  ------   ------   --------   ------------------------------------------"
 
-    while IFS=' ' read -r pid logfile rest; do
+    while IFS=' ' read -r first second third rest; do
+        case "$first" in
+            BACKUP|RESTORE)
+                job_type="$first"
+                pid="$second"
+                logfile="$third"
+                ;;
+            *)
+                job_type="RESTORE"
+                pid="$first"
+                logfile="$second"
+                ;;
+        esac
+
         # Skip blank/malformed lines.
         case "$pid" in ''|*[!0-9]*) continue ;; esac
 
@@ -656,7 +696,7 @@ view_restore_status() {
         else
             status="DONE"
         fi
-        printf "  %-8s  %-10s  %s\n" "$pid" "$status" "$logfile"
+        printf "  %-8s  %-8s  %-10s  %s\n" "$job_type" "$pid" "$status" "$logfile"
     done < "$RESTORE_PID_FILE"
 
     echo ""
@@ -665,7 +705,7 @@ view_restore_status() {
     echo "=========================================="
 
     # Show tail of the most recent log file.
-    latest_log=$(tail -1 "$RESTORE_PID_FILE" | awk '{print $2}')
+    latest_log=$(tail -1 "$RESTORE_PID_FILE" | awk '{ if ($1 == "BACKUP" || $1 == "RESTORE") print $3; else print $2 }')
     if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
         tail -15 "$latest_log"
     else
@@ -704,6 +744,7 @@ validate_load_test_ready() {
 }
 
 load_or_prompt_config
+reload_app_info
 
 while true; do
     clear
@@ -726,7 +767,7 @@ while true; do
         3) restore_flashback ;;
         4) validate_load_test_ready ;;
         5) echo "Exiting..."; exit 0 ;;
-        6) delete_config; load_or_prompt_config ;;
+        6) delete_config; load_or_prompt_config; reload_app_info ;;
         7) view_restore_status ;;
         *) echo "Invalid option."; pause ;;
     esac

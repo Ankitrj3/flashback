@@ -31,7 +31,7 @@ BACKUP_DIR="${FLASHBACK_BACKUP_DIR:-/iriscommon/backup/tar}"
 APP_INFO_FILE="${FLASHBACK_APP_INFO_FILE:-$HOME/.flashback_app_info}"
 STOP_CMD="${FLASHBACK_STOP_CMD:-adstpall.sh}"
 VERIFY_DB_SESSIONS="${FLASHBACK_VERIFY_DB_SESSIONS:-true}"
-APP_STOPPED_BY_TOOL=false
+APP_STOPPED_BY_TOOL="${FLASHBACK_APP_STOPPED_BY_TOOL:-false}"
 
 run_app_cmd() {
     cmd="$1"

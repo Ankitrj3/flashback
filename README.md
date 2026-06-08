@@ -5,7 +5,7 @@ Production-grade Oracle EBS flashback automation for database restore-point mana
 ## What It Does
 
 - **View Flashback** — Shows current guaranteed restore points, application tar backup files, and restore history from the Oracle alert log. Read-only, no state changes.
-- **Make Flashback Request** — Validates the APPS password (when stopping services), checks application process state, detects RUN/PATCH filesystem roles, creates CDB and PDB guaranteed restore points with a unique `DDMonYY_HHmm` timestamp, and launches tar backups for all three filesystems in the background.
+- **Make Flashback Request** — Validates the APPS password (when stopping services), checks application process state, detects RUN/PATCH filesystem roles, creates CDB and PDB guaranteed restore points with a unique `DDMonYY_HHmm` timestamp, and launches tar backups for all three filesystems. If the tool stopped services, it waits for backup completion before restarting them.
 - **Restore Flashback** — Validates the APPS password, stops application services, queries and selects restore points interactively, selects the backup date tag, then launches the full restore in detached mode (DB flashback + filesystem restore + service restart).
 - **Validate Load-Test Readiness** — Checks application availability, filesystem paths, free space, database and PDB open mode, invalid objects, blocking sessions, and recent alert-log errors.
 
@@ -65,7 +65,7 @@ FLASHBACK_LOAD_TEST_MIN_APP_PROCESSES  Minimum process count for readiness check
 |---|---|
 | `~/.flashback_env` | All operator configuration; loaded at every startup |
 | `~/.flashback_app_info` | RUN/PATCH/NE filesystem paths and `FLASHBACK_APP_STOPPED_BY_TOOL` flag; loaded at startup |
-| `~/.flashback_restore_pid` | Detached restore PID and log path for status tracking (Option 7) |
+| `~/.flashback_restore_pid` | Detached backup/restore PID and log path for status tracking (Option 7) |
 
 ## Restore Point Naming
 
@@ -86,7 +86,7 @@ An optional custom suffix can be typed at the restore-point name prompt to overr
 - The APPS password is collected silently (hidden input) on first use and persisted to `~/.flashback_env`.
 - RUN/PATCH filesystem roles are auto-detected via EBS context XML or `EBSapps.env` symlink. If both methods fail, the operator is prompted once and the choice is persisted to `~/.flashback_app_info` for all subsequent runs.
 - EBS service shutdown waits up to 20 minutes for all processes to stop before continuing.
-- Backups (tar) run in the background; restore runs fully detached. Both write timestamped logs under `logs/`.
+- Backups (tar) run in the background when services remain up. If the tool stopped services for the backup, it waits for the backup to finish before restarting services. Restore runs fully detached. Both write timestamped logs under `logs/`.
 - Use **Option 6 (Delete stored config)** to clear `~/.flashback_env` and start configuration from scratch. Delete `~/.flashback_app_info` manually to force re-detection of filesystem roles.
 
 ## Main Files

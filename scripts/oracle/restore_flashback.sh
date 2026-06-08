@@ -76,20 +76,20 @@ fi
 marker "END" "Step 1/5: Stopping application services"
 
 echo ""
-marker "START" "Step 2/5: Restoring application filesystems"
-if ! sh "$SCRIPT_DIR/restore_backup.sh" "$RESTORE_DATE_TAG"; then
-    log "ERROR: Application filesystem restore failed."
-    exit 1
-fi
-marker "END" "Step 2/5: Restoring application filesystems"
-
-echo ""
-marker "START" "Step 3/5: Flashing back database"
+marker "START" "Step 2/5: Flashing back database"
 if ! sh "$SCRIPT_DIR/flashback_database.sh" "$CDB_RP_NAME" "$PDB_RP_NAME"; then
     log "ERROR: Database flashback failed."
     exit 1
 fi
-marker "END" "Step 3/5: Flashing back database"
+marker "END" "Step 2/5: Flashing back database"
+
+echo ""
+marker "START" "Step 3/5: Restoring application filesystems"
+if ! sh "$SCRIPT_DIR/restore_backup.sh" "$RESTORE_DATE_TAG"; then
+    log "ERROR: Application filesystem restore failed."
+    exit 1
+fi
+marker "END" "Step 3/5: Restoring application filesystems"
 
 echo ""
 marker "START" "Step 4/5: Starting application services"

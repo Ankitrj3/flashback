@@ -60,6 +60,8 @@ fs_label() {
 
 run_backup_on_node() {
     node="$1"
+    pids=""
+    failed=0
 
     # In real mode, fail before launching background tar jobs if the backup
     # target is missing or unwritable. This keeps partial backups obvious.
@@ -83,24 +85,39 @@ run_backup_on_node() {
         log_file="${BACKUP_DIR}/${INSTANCE_ID}_${label}_backup_${DATE_TAG}.log"
 
         if [ -z "$node" ]; then
-            log "Launching local: nohup tar -cvf $archive $fs &"
+            log "Launching local: tar -cvf $archive $fs"
             (
                 cd "$APP_BASE_DIR" || exit 1
-                nohup tar -cvf "$archive" "$fs" > "$log_file" 2>&1 </dev/null &
+                tar -cvf "$archive" "$fs" > "$log_file" 2>&1 </dev/null
             ) &
+            pids="$pids $!"
         else
-            log "Launching remote on $node: nohup tar -cvf $archive $fs &"
+            log "Launching remote on $node: tar -cvf $archive $fs"
             # shellcheck disable=SC2086
             ssh $ssh_opts "$SSH_USER@$node" \
-                "cd '$APP_BASE_DIR' && nohup tar -cvf '$archive' '$fs' > '$log_file' 2>&1 </dev/null &"
+                "cd '$APP_BASE_DIR' && tar -cvf '$archive' '$fs' > '$log_file' 2>&1 </dev/null" &
+            pids="$pids $!"
         fi
 
         log "Backup started: $archive"
         log "Backup log    : $log_file"
     done
+
+    log "Waiting for filesystem backup tar jobs to complete on node '${node:-local}'..."
+    for pid in $pids; do
+        if ! wait "$pid"; then
+            failed=$((failed + 1))
+        fi
+    done
+
+    if [ "$failed" -gt 0 ]; then
+        log "ERROR: $failed backup tar job(s) failed on node '${node:-local}'."
+        return 1
+    fi
+
     marker "END" "Application tar backup launch for node '${node:-local}'"
 
-    log "Backup commands were detached successfully for node '${node:-local}'."
+    log "Backup tar jobs completed successfully for node '${node:-local}'."
 }
 
 overall_failed=0
