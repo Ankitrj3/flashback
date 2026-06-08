@@ -72,25 +72,6 @@ detect_file_system_roles() {
     PATCH_FS="$APP_BASE_DIR/fs1/EBSapps/appl"
     NE_FS="$APP_BASE_DIR/fs_ne"
 
-    # --- Use previously persisted/confirmed roles if available ---
-    # If FLASHBACK_RUN_FS and FLASHBACK_PATCH_FS are already set in the
-    # environment (loaded from ~/.flashback_app_info at menu startup or from
-    # a prior capture in this session), skip auto-detection and the operator
-    # prompt entirely — no need to ask again for something already confirmed.
-    if [ -n "${FLASHBACK_RUN_FS:-}" ] && [ -n "${FLASHBACK_PATCH_FS:-}" ]; then
-        RUN_FS="$FLASHBACK_RUN_FS"
-        PATCH_FS="$FLASHBACK_PATCH_FS"
-        NE_FS="${FLASHBACK_NE_FS:-$APP_BASE_DIR/fs_ne}"
-        log "FS role detection method      : Loaded from previous confirmed detection"
-        echo ""
-        echo "  FS Role Detection Result (using persisted roles):"
-        echo "    RUN   FS : $RUN_FS"
-        echo "    PATCH FS : $PATCH_FS"
-        echo "    NE    FS : $NE_FS"
-        echo ""
-        return 0
-    fi
-
     # --- Method 1: XML s_file_edition_type parsing ---
 
     log "Detecting RUN/PATCH filesystem roles (Method 1: context XML)..."

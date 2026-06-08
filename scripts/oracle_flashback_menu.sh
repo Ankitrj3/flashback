@@ -364,17 +364,6 @@ make_flashback_request() {
     echo ""
     echo "Step 3/3: Starting application tar backup..."
     nohup sh "$SCRIPT_DIR/oracle/create_backup.sh" > "$BK_LOG_FILE" 2>&1 &
-    local BK_PID=$!
-
-    echo ""
-    echo "=========================================="
-    echo "  Backup launched detached."
-    echo "  Backup PID : $BK_PID"
-    echo "  Log file   : $BK_LOG_FILE"
-    echo ""
-    echo "  Monitor progress with:"
-    echo "    tail -f $BK_LOG_FILE"
-    echo "=========================================="
 
     if ! restart_app_if_needed "successful flashback request completion"; then
         pause
@@ -638,13 +627,7 @@ EOF
     chmod 600 "$RESTORE_PID_FILE"
 
     echo ""
-    echo "  Restore PID: $RESTORE_PID"
-    echo ""
-    echo "  Monitor progress with:"
-    echo "    tail -f $LOG_FILE"
-    echo ""
-    echo "  Check status from menu: option 8"
-    echo ""
+    echo "Restore launched. Job is running in the background."
     pause
 }
 
@@ -721,9 +704,6 @@ validate_load_test_ready() {
 }
 
 load_or_prompt_config
-# Load persisted filesystem roles and app-state from the previous run so that
-# capture_app_info.sh can skip re-detection (including the operator fs1/fs2 prompt).
-reload_app_info
 
 while true; do
     clear
